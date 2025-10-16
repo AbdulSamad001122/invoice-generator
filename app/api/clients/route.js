@@ -1,46 +1,138 @@
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { auth, createClerkClient } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
+import { getCachedUser } from "@/lib/userCache";
+import prisma from "@/lib/prisma";
+import { 
+  validatePagination, 
+  validateCursorPagination,
+  generateCursor,
+  validateEmail, 
+  validateName, 
+  sanitizeString,
+  validateRequestSize 
+} from "@/lib/validation";
+import { applyRateLimit, createRateLimitResponse } from "@/lib/rateLimiter";
 
-const prisma = new PrismaClient();
-const clerkClient = createClerkClient({
-  secretKey: process.env.CLERK_SECRET_KEY,
-});
-
-// GET /api/clients - Fetch all clients for the authenticated user
-export async function GET() {
+// GET /api/clients - Fetch clients for the authenticated user with pagination support
+export async function GET(request) {
   try {
+    // Apply rate limiting
+    const rateLimitResult = applyRateLimit(request, 'read');
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
+    }
+
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const user = await clerkClient.users.getUser(userId);
-    const username = user.username || user.firstName || "Unknown";
+    // Parse pagination parameters from URL
+    const { searchParams } = new URL(request.url);
+    const useCursor = searchParams.get("cursor") !== null || searchParams.get("use_cursor") === "true";
+    
+    // Use cached user lookup to reduce database queries
+    const dbUser = await getCachedUser(userId);
 
-    // Find or create user in database
-    let dbUser = await prisma.user.findUnique({
-      where: { clerkId: userId },
-    });
+    if (useCursor) {
+      // Use cursor-based pagination (more efficient for large datasets)
+      const { cursor, limit } = validateCursorPagination(
+        searchParams.get("cursor"),
+        searchParams.get("limit"),
+        50 // Max 50 clients per page
+      );
 
-    if (!dbUser) {
-      dbUser = await prisma.user.create({
-        data: {
-          name: username,
-          clerkId: userId,
+      // Build where clause with cursor
+      const whereClause = {
+        userId: dbUser.id,
+        ...(cursor && { id: { lt: cursor } }) // Use 'lt' for descending order
+      };
+
+      // Fetch clients with cursor pagination
+      const clients = await prisma.client.findMany({
+        where: whereClause,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          autoRenumberInvoices: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: {
+          id: "desc", // Use ID for consistent ordering
+        },
+        take: limit + 1, // Fetch one extra to check if there are more
+      });
+
+      const hasMore = clients.length > limit;
+      if (hasMore) {
+        clients.pop(); // Remove the extra item
+      }
+
+      const nextCursor = hasMore && clients.length > 0 ? generateCursor(clients[clients.length - 1].id) : null;
+
+      return NextResponse.json({
+        clients,
+        pagination: {
+          limit,
+          hasMore,
+          nextCursor,
+          cursors: {
+            next: nextCursor
+          }
+        },
+      });
+    } else {
+      // Fallback to offset-based pagination for backward compatibility
+      const { page, limit, offset } = validatePagination(
+        searchParams.get("page"),
+        searchParams.get("limit"),
+        50 // Max 50 clients per page
+      );
+
+      // Get total count for pagination metadata
+      const totalCount = await prisma.client.count({
+        where: {
+          userId: dbUser.id,
+        },
+      });
+
+      // Fetch clients for this user with pagination
+      const clients = await prisma.client.findMany({
+        where: {
+          userId: dbUser.id,
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          autoRenumberInvoices: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        skip: offset,
+        take: limit,
+      });
+
+      const totalPages = Math.ceil(totalCount / limit);
+      const hasMore = page < totalPages;
+
+      return NextResponse.json({
+        clients,
+        pagination: {
+          page,
+          limit,
+          totalCount,
+          totalPages,
+          hasMore,
         },
       });
     }
-
-    // Fetch clients for this user
-    const clients = await prisma.client.findMany({
-      where: {
-        userId: dbUser.id,
-      },
-    });
-
-    return NextResponse.json(clients);
   } catch (error) {
     console.error("Error fetching clients:", error);
     return NextResponse.json(
@@ -53,57 +145,57 @@ export async function GET() {
 // POST /api/clients - Create a new client
 export async function POST(request) {
   try {
+    // Apply rate limiting
+    const rateLimitResult = applyRateLimit(request, 'write');
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
+    }
+
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // Validate request size
+    const sizeValidation = await validateRequestSize(request, 10240); // 10KB limit
+    if (!sizeValidation.isValid) {
+      return NextResponse.json(
+        { error: sizeValidation.error },
+        { status: 413 }
+      );
+    }
+
     const body = await request.json();
     const { name, email } = body;
 
-    // Validate required fields
-    if (!name || name.trim() === "") {
+    // Validate and sanitize required fields
+    const nameValidation = validateName(name);
+    if (!nameValidation.isValid) {
       return NextResponse.json(
-        { error: "Client name is required" },
+        { error: nameValidation.error },
         { status: 400 }
       );
     }
 
-    // Validate email format if provided
-    if (email && email.trim() !== "") {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        return NextResponse.json(
-          { error: "Invalid email format" },
-          { status: 400 }
-        );
-      }
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.isValid) {
+      return NextResponse.json(
+        { error: emailValidation.error },
+        { status: 400 }
+      );
     }
 
-    const user = await clerkClient.users.getUser(userId);
-    const username = user.username || user.firstName || "Unknown";
-
-    // Find or create user in database
-    let dbUser = await prisma.user.findUnique({
-      where: { clerkId: userId },
-    });
-
-    if (!dbUser) {
-      dbUser = await prisma.user.create({
-        data: {
-          name: username,
-          clerkId: userId,
-        },
-      });
-    }
+    // Use cached user lookup to reduce database queries
+    const dbUser = await getCachedUser(userId);
 
     // add client into Db
     const newClient = await prisma.client.create({
       data: {
-        name: name.trim(),
-        email: email?.trim() || null,
+        name: nameValidation.value,
+        email: emailValidation.value,
         userId: dbUser.id, // Use the database user's id
+        autoRenumberInvoices: true, // Default to auto-renumbering enabled
       },
     });
 
@@ -125,59 +217,100 @@ export async function POST(request) {
 // PUT /api/clients/[id] - Update an existing client
 export async function PUT(request) {
   try {
+    // Apply rate limiting
+    const rateLimitResult = applyRateLimit(request, 'write');
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
+    }
+
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const user = await clerkClient.users.getUser(userId);
-    const username = user.username || user.firstName || "Unknown";
-
-    // Find or create user in database
-    let dbUser = await prisma.user.findUnique({
-      where: { clerkId: userId },
-    });
-
-    if (!dbUser) {
-      dbUser = await prisma.user.create({
-        data: {
-          name: username,
-          clerkId: userId,
-        },
-      });
+    // Validate request size
+    const sizeValidation = await validateRequestSize(request, 10240); // 10KB limit
+    if (!sizeValidation.isValid) {
+      return NextResponse.json(
+        { error: sizeValidation.error },
+        { status: 413 }
+      );
     }
 
+    // Use cached user lookup to reduce database queries
+    const dbUser = await getCachedUser(userId);
+
     const body = await request.json();
-    const { id, name, email } = body;
+    const { id, name, email, updateOption } = body;
 
     // Validate required fields
-    if (!id || !name || name.trim() === "") {
+    if (!id) {
       return NextResponse.json(
-        { error: "Client ID and name are required" },
+        { error: "Client ID is required" },
         { status: 400 }
       );
     }
 
-    // Validate email format if provided
-    if (email && email.trim() !== "") {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        return NextResponse.json(
-          { error: "Invalid email format" },
-          { status: 400 }
-        );
-      }
+    // Validate and sanitize fields
+    const nameValidation = validateName(name);
+    if (!nameValidation.isValid) {
+      return NextResponse.json(
+        { error: nameValidation.error },
+        { status: 400 }
+      );
+    }
+
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.isValid) {
+      return NextResponse.json(
+        { error: emailValidation.error },
+        { status: 400 }
+      );
     }
 
     // Update client in database
     const updatedClient = await prisma.client.update({
       where: { id },
       data: {
-        name: name.trim(),
-        email: email?.trim() || null,
+        name: nameValidation.value,
+        email: emailValidation.value,
       },
     });
+
+    // If updateOption is 'allInvoices', update all invoices with new client data
+    if (updateOption === "allInvoices") {
+      // Get all invoices for this client
+      const invoices = await prisma.invoice.findMany({
+        where: {
+          clientId: id,
+          userId: dbUser.id,
+        },
+        select: {
+          id: true,
+          data: true, // Only need id and data for updating
+        },
+      });
+
+      // Update each invoice's data with new client information
+      for (const invoice of invoices) {
+        const invoiceData = invoice.data;
+
+        // Update client information in invoice data
+        if (invoiceData && typeof invoiceData === "object") {
+          const updatedInvoiceData = {
+            ...invoiceData,
+            clientName: nameValidation.value,
+            clientEmail: emailValidation.value,
+          };
+
+          await prisma.invoice.update({
+            where: { id: invoice.id },
+            data: { data: updatedInvoiceData },
+          });
+        }
+      }
+    }
 
     return NextResponse.json(updatedClient);
   } catch (error) {
@@ -192,6 +325,12 @@ export async function PUT(request) {
 // DELETE /api/clients/[id] - Delete a client
 export async function DELETE(request) {
   try {
+    // Apply rate limiting
+    const rateLimitResult = applyRateLimit(request, 'write');
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
+    }
+
     const { userId } = await auth();
 
     if (!userId) {
@@ -208,15 +347,31 @@ export async function DELETE(request) {
       );
     }
 
-    // Delete client from database
-    await prisma.client.delete({
-      where: { id },
-    });
+    // Use cached user lookup to reduce database queries
+    const dbUser = await getCachedUser(userId);
 
-    return NextResponse.json(
-      { message: "Client deleted successfully" },
-      { status: 200 }
-    );
+    // Delete client from database with ownership verification
+    try {
+      await prisma.client.delete({
+        where: {
+          id,
+          userId: dbUser.id, // Ensure user owns the client
+        },
+      });
+
+      return NextResponse.json(
+        { message: "Client deleted successfully" },
+        { status: 200 }
+      );
+    } catch (deleteError) {
+      if (deleteError.code === "P2025") {
+        return NextResponse.json(
+          { error: "Client not found" },
+          { status: 404 }
+        );
+      }
+      throw deleteError;
+    }
   } catch (error) {
     console.error("Error deleting client:", error);
     return NextResponse.json(

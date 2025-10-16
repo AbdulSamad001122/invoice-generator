@@ -27,13 +27,13 @@ export function ClientForm({ onClose, onClientAdded }) {
   const validateForm = () => {
     const newErrors = {};
 
-    if (!formData.name.trim()) {
+    if (!formData.name || !formData.name.trim()) {
       newErrors.name = "Name is required";
     }
 
-    if (!formData.email.trim()) {
+    if (!formData.email || !formData.email.trim()) {
       newErrors.email = "Email is required";
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
       newErrors.email = "Please enter a valid email address";
     }
 
@@ -168,8 +168,13 @@ export function ClientForm({ onClose, onClientAdded }) {
               >
                 Cancel
               </Button>
-              <Button type="submit" className="flex-1" disabled={loading}>
-                {loading ? "Creating..." : "Create Client"}
+              <Button
+                type="submit"
+                className="flex-1"
+                disabled={loading || !formData.name || !formData.name.trim() || !formData.email || !formData.email.trim()}
+              >
+                {loading && <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />}
+                Create Client
               </Button>
             </div>
           </form>

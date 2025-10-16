@@ -1,21 +1,50 @@
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import { auth } from "@clerk/nextjs/server";
+import { getCachedUser } from "@/lib/userCache";
+import prisma from "@/lib/prisma";
+import { applyRateLimit, createRateLimitResponse } from "@/lib/rateLimiter";
 
 export async function GET(request, { params }) {
   try {
+    // Apply rate limiting
+    const rateLimitResult = applyRateLimit(request, 'read');
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
+    }
+
+    const { userId } = await auth();
+
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const resolvedParams = await params;
     const clientId = resolvedParams.id;
     
-    if (!clientId) {
-      return NextResponse.json({ error: "Client ID is required" }, { status: 400 });
+    if (!clientId || !/^[a-zA-Z0-9_-]+$/.test(clientId)) {
+      return NextResponse.json(
+        { error: "Invalid client ID format" },
+        { status: 400 }
+      );
     }
 
-    // Find the specific client
+    // Use cached user lookup to reduce database queries
+    const dbUser = await getCachedUser(userId);
+
+    // Find the specific client that belongs to the authenticated user
     const client = await prisma.client.findUnique({
       where: {
         id: clientId,
+        userId: dbUser.id,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        autoRenumberInvoices: true,
+        createdAt: true,
+        updatedAt: true,
+        userId: true, // Needed for security checks
       },
     });
 
@@ -28,6 +57,73 @@ export async function GET(request, { params }) {
     console.error("Error fetching client:", error);
     return NextResponse.json(
       { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(request, { params }) {
+  try {
+    const { userId } = await auth();
+
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const resolvedParams = await params;
+    const clientId = resolvedParams.id;
+    
+    if (!clientId) {
+      return NextResponse.json({ error: "Client ID is required" }, { status: 400 });
+    }
+
+    const body = await request.json();
+    const { autoRenumberInvoices } = body;
+
+    // Validate the input
+    if (typeof autoRenumberInvoices !== 'boolean') {
+      return NextResponse.json(
+        { error: 'autoRenumberInvoices must be a boolean' },
+        { status: 400 }
+      );
+    }
+
+    // Use cached user lookup to reduce database queries
+    const dbUser = await getCachedUser(userId);
+
+    // Verify the client belongs to the authenticated user
+    const existingClient = await prisma.client.findFirst({
+      where: {
+        id: clientId,
+        userId: dbUser.id,
+      },
+    });
+
+    if (!existingClient) {
+      return NextResponse.json(
+        { error: 'Client not found' },
+        { status: 404 }
+      );
+    }
+
+    // Update the client's auto-renumbering setting
+    const updatedClient = await prisma.client.update({
+      where: {
+        id: clientId,
+      },
+      data: {
+        autoRenumberInvoices,
+      },
+    });
+
+    return NextResponse.json({
+      message: 'Client setting updated successfully',
+      client: updatedClient,
+    });
+  } catch (error) {
+    console.error('Error updating client setting:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }

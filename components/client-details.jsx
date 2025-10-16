@@ -9,34 +9,64 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import LoadingButton from "@/components/ui/loading-button";
 import { Badge } from "@/components/ui/badge";
-import { Plus, FileText, Download, Calendar, DollarSign } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Plus, FileText, Download, Calendar, DollarSign, Settings } from "lucide-react";
+import { useInvoices } from "@/contexts/InvoiceContext";
 
 export function ClientDetails({ client, onCreateInvoice }) {
-  const [invoices, setInvoices] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { getInvoicesForClient, loading, fetchInvoices } = useInvoices();
+  const [autoRenumberInvoices, setAutoRenumberInvoices] = useState(true);
+  const [isUpdatingToggle, setIsUpdatingToggle] = useState(false);
 
+  // Get invoices from context
+  const invoices = client ? getInvoicesForClient(client.id) : [];
+  const isLoading = client ? loading[client.id] || false : false;
+
+  // Load client's auto-renumbering setting
   useEffect(() => {
     if (client) {
-      fetchInvoices();
+      setAutoRenumberInvoices(client.autoRenumberInvoices ?? true);
     }
   }, [client]);
 
-  const fetchInvoices = async () => {
+  // Handle toggle change
+  const handleToggleChange = async (checked) => {
+    if (!client) return;
+    
+    setIsUpdatingToggle(true);
     try {
-      const response = await fetch(`/api/invoices?clientId=${client.id}`);
-      if (response.ok) {
-        const data = await response.json();
-        setInvoices(data.invoices);
-      } else {
-        console.error("Failed to fetch invoices");
+      const response = await fetch(`/api/clients/${client.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          autoRenumberInvoices: checked,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update setting');
       }
+
+      setAutoRenumberInvoices(checked);
     } catch (error) {
-      console.error("Error fetching invoices:", error);
+      console.error('Error updating auto-renumber setting:', error);
+      // Revert the toggle if the update failed
+      setAutoRenumberInvoices(!checked);
     } finally {
-      setLoading(false);
+      setIsUpdatingToggle(false);
     }
   };
+
+  // Removed fetchInvoices call - invoice-list component handles fetching
+  // useEffect(() => {
+  //   if (client) {
+  //     fetchInvoices(client.id);
+  //   }
+  // }, [client?.id]);
 
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat("en-US", {
@@ -56,13 +86,13 @@ export function ClientDetails({ client, onCreateInvoice }) {
   const getStatusColor = (status) => {
     switch (status) {
       case "PAID":
-        return "bg-green-100 text-green-800";
+        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
       case "PENDING":
-        return "bg-yellow-100 text-yellow-800";
+        return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
       case "OVERDUE":
-        return "bg-red-100 text-red-800";
+        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
       default:
-        return "bg-gray-100 text-gray-800";
+        return "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200";
     }
   };
 
@@ -71,10 +101,10 @@ export function ClientDetails({ client, onCreateInvoice }) {
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center">
           <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-muted-foreground mb-2">
+          <h3 className="text-lg font-semibold text-muted-foreground mb-2 dark:text-gray-300">
             Select a Client
           </h3>
-          <p className="text-muted-foreground">
+          <p className="text-muted-foreground dark:text-gray-400">
             Choose a client from the sidebar to view their invoices
           </p>
         </div>
@@ -88,35 +118,69 @@ export function ClientDetails({ client, onCreateInvoice }) {
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-3xl font-bold">{client.name}</h1>
-            <p className="text-muted-foreground">{client.email}</p>
+            <h1 className="text-3xl font-bold dark:text-white">
+              {client.name}
+            </h1>
+            <p className="text-muted-foreground dark:text-gray-400">
+              {client.email}
+            </p>
           </div>
-          <Button onClick={() => onCreateInvoice(client)} className="gap-2">
+          <LoadingButton
+            onClick={() => onCreateInvoice(client)}
+            className="gap-2"
+            errorMessage="Failed to create invoice. Please try again."
+          >
             <Plus className="h-4 w-4" />
             Create Invoice
-          </Button>
+          </LoadingButton>
         </div>
 
-        <Card>
+        <Card className="dark:bg-gray-800 dark:border-gray-700">
           <CardContent className="pt-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">
+                <p className="text-sm font-medium text-muted-foreground dark:text-gray-400">
                   Email
                 </p>
-                <p className="text-sm">{client.email}</p>
+                <p className="text-sm dark:text-gray-200">{client.email}</p>
               </div>
               <div>
-                <p className="text-sm font-medium text-muted-foreground">
+                <p className="text-sm font-medium text-muted-foreground dark:text-gray-400">
                   Phone
                 </p>
-                <p className="text-sm">{client.phone || "Not provided"}</p>
+                <p className="text-sm dark:text-gray-200">
+                  {client.phone || "Not provided"}
+                </p>
               </div>
               <div>
-                <p className="text-sm font-medium text-muted-foreground">
+                <p className="text-sm font-medium text-muted-foreground dark:text-gray-400">
                   Address
                 </p>
-                <p className="text-sm">{client.address || "Not provided"}</p>
+                <p className="text-sm dark:text-gray-200">
+                  {client.address || "Not provided"}
+                </p>
+              </div>
+            </div>
+            
+            {/* Invoice Settings */}
+            <div className="border-t pt-4 dark:border-gray-600">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Settings className="h-4 w-4 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm font-medium dark:text-gray-200">
+                      Auto-renumber invoices
+                    </p>
+                    <p className="text-xs text-muted-foreground dark:text-gray-400">
+                      Automatically renumber invoices when one is deleted
+                    </p>
+                  </div>
+                </div>
+                <Switch
+                  checked={autoRenumberInvoices}
+                  onCheckedChange={handleToggleChange}
+                  disabled={isUpdatingToggle}
+                />
               </div>
             </div>
           </CardContent>
@@ -126,25 +190,27 @@ export function ClientDetails({ client, onCreateInvoice }) {
       {/* Invoices Section */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-semibold">Invoices</h2>
+          <h2 className="text-2xl font-semibold dark:text-white">Invoices</h2>
           <Badge variant="secondary">
             {invoices.length} {invoices.length === 1 ? "Invoice" : "Invoices"}
           </Badge>
         </div>
 
-        {loading ? (
+        {isLoading ? (
           <div className="text-center py-8">
-            <p className="text-muted-foreground">Loading invoices...</p>
+            <p className="text-muted-foreground dark:text-gray-400">
+              Loading invoices...
+            </p>
           </div>
         ) : invoices.length === 0 ? (
-          <Card>
+          <Card className="dark:bg-gray-800 dark:border-gray-700">
             <CardContent className="pt-6">
               <div className="text-center py-8">
                 <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <h3 className="text-lg font-semibold text-muted-foreground mb-2">
+                <h3 className="text-lg font-semibold text-muted-foreground mb-2 dark:text-gray-300">
                   No Invoices Yet
                 </h3>
-                <p className="text-muted-foreground mb-4">
+                <p className="text-muted-foreground mb-4 dark:text-gray-400">
                   Create your first invoice for {client.name}
                 </p>
                 <Button
@@ -179,16 +245,16 @@ export function ClientDetails({ client, onCreateInvoice }) {
               return (
                 <Card
                   key={invoice.id}
-                  className="hover:shadow-md transition-shadow"
+                  className="hover:shadow-md transition-shadow dark:bg-gray-800 dark:border-gray-700"
                 >
                   <CardHeader>
                     <div className="flex items-center justify-between">
                       <div>
-                        <CardTitle className="text-lg">
+                        <CardTitle className="text-lg dark:text-white">
                           {invoiceData?.invoiceNumber ||
                             `Invoice #${invoice.id}`}
                         </CardTitle>
-                        <CardDescription className="flex items-center gap-4 mt-1">
+                        <CardDescription className="flex items-center gap-4 mt-1 dark:text-gray-300">
                           <span className="flex items-center gap-1">
                             <Calendar className="h-3 w-3" />
                             {formatDate(
@@ -215,8 +281,10 @@ export function ClientDetails({ client, onCreateInvoice }) {
 
                   {invoiceData?.items && invoiceData.items.length > 0 && (
                     <CardContent>
-                      <div className="text-sm text-muted-foreground">
-                        <p className="font-medium mb-1">Items:</p>
+                      <div className="text-sm text-muted-foreground dark:text-gray-400">
+                        <p className="font-medium mb-1 dark:text-gray-300">
+                          Items:
+                        </p>
                         <ul className="list-disc list-inside space-y-1">
                           {invoiceData.items.slice(0, 3).map((item, index) => (
                             <li key={index}>
@@ -225,7 +293,7 @@ export function ClientDetails({ client, onCreateInvoice }) {
                             </li>
                           ))}
                           {invoiceData.items.length > 3 && (
-                            <li className="text-muted-foreground">
+                            <li className="text-muted-foreground dark:text-gray-500">
                               +{invoiceData.items.length - 3} more items
                             </li>
                           )}

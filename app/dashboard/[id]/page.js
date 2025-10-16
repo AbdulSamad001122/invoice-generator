@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
+import { useClients } from "@/contexts/ClientContext";
+import { useInvoices } from "@/contexts/InvoiceContext";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -21,8 +23,7 @@ import {
   User,
   Mail,
 } from "lucide-react";
-import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
-import { AppSidebar } from "@/components/app-sidebar";
+import { SidebarTrigger } from "@/components/ui/sidebar";
 import InvoiceForm from "@/components/invoice-form";
 import InvoiceList from "@/components/invoice-list";
 import axios from "axios";
@@ -32,30 +33,22 @@ export default function ClientDashboard() {
   const params = useParams();
   const router = useRouter();
   const clientId = params.id;
+  const { getClientById, loading: clientsLoading } = useClients();
+  const { createInvoice, updateInvoice } = useInvoices();
 
-  const [client, setClient] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
 
+  // Get client from context instead of making API call
+  const client = getClientById(clientId);
+  const loading = clientsLoading;
+
   useEffect(() => {
     if (clientId) {
-      setSelectedClientId(parseInt(clientId));
-      fetchClientData();
+      setSelectedClientId(clientId);
     }
   }, [clientId]);
-
-  const fetchClientData = async () => {
-    try {
-      const response = await axios.get(`/api/clients/${clientId}`);
-      setClient(response.data);
-    } catch (error) {
-      console.error("Error fetching client:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleClientSelect = (selectedClient) => {
     router.push(`/dashboard/${selectedClient.id}`);
@@ -65,13 +58,26 @@ export default function ClientDashboard() {
     // Handle new client addition if needed
   };
 
-  const handleInvoiceCreated = (newInvoice) => {
-    console.log("Invoice created:", newInvoice);
-    // You can add logic here to update local state or refresh invoice list
+  const handleInvoiceCreated = async (responseData) => {
+    console.log("Invoice operation completed:", responseData);
+    
+    try {
+      const invoiceObject = responseData.invoice || responseData;
+      
+      if (editingInvoice) {
+        // For updates, pass the complete invoice object to context
+        await updateInvoice(editingInvoice.id, invoiceObject);
+      } else {
+        // For creation, pass the complete invoice object to context
+        await createInvoice(invoiceObject);
+      }
+    } catch (error) {
+      console.error("Error updating context:", error);
+    }
+    
+    // Close the form and reset editing state
     setShowInvoiceForm(false);
     setEditingInvoice(null);
-    // Optionally refresh the page or update invoice list
-    window.location.reload();
   };
 
   const handleEditInvoice = (invoice) => {
@@ -82,8 +88,8 @@ export default function ClientDashboard() {
   // Show loading state while Clerk is loading
   if (!isLoaded) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900"></div>
+      <div className="min-h-screen flex items-center justify-center dark:bg-gray-900">
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900 dark:border-gray-100"></div>
       </div>
     );
   }
@@ -96,66 +102,45 @@ export default function ClientDashboard() {
 
   if (loading) {
     return (
-      <SidebarProvider>
-        <AppSidebar
-          selectedClientId={selectedClientId}
-          onClientSelect={handleClientSelect}
-          onAddClient={handleAddClient}
-        />
-        <SidebarInset>
-          <div className="container mx-auto py-8">
-            <div className="animate-pulse space-y-4">
-              <div className="h-8 bg-gray-200 rounded w-1/4"></div>
-              <div className="h-4 bg-gray-200 rounded w-1/2"></div>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                {[...Array(4)].map((_, i) => (
-                  <div key={i} className="h-24 bg-gray-200 rounded"></div>
-                ))}
-              </div>
-            </div>
+      <div className="container mx-auto py-8">
+        <div className="animate-pulse space-y-4">
+          <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-1/4"></div>
+          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/2"></div>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {[...Array(4)].map((_, i) => (
+              <div
+                key={i}
+                className="h-24 bg-gray-200 dark:bg-gray-700 rounded"
+              ></div>
+            ))}
           </div>
-        </SidebarInset>
-      </SidebarProvider>
+        </div>
+      </div>
     );
   }
 
   if (showInvoiceForm) {
     return (
-      <SidebarProvider>
-        <AppSidebar
-          selectedClientId={selectedClientId}
-          onClientSelect={handleClientSelect}
-          onAddClient={handleAddClient}
+      <div className="container mx-auto py-8">
+        <InvoiceForm
+          invoice={editingInvoice}
+          onInvoiceCreated={handleInvoiceCreated}
+          onCancel={() => {
+            setShowInvoiceForm(false);
+            setEditingInvoice(null);
+          }}
+          preselectedClient={client}
         />
-        <SidebarInset>
-          <div className="container mx-auto py-8">
-            <InvoiceForm
-              invoice={editingInvoice}
-              onInvoiceCreated={handleInvoiceCreated}
-              onCancel={() => {
-                setShowInvoiceForm(false);
-                setEditingInvoice(null);
-              }}
-              preselectedClient={client}
-            />
-          </div>
-        </SidebarInset>
-      </SidebarProvider>
+      </div>
     );
   }
 
   return (
-    <SidebarProvider>
-      <AppSidebar
-        selectedClientId={selectedClientId}
-        onClientSelect={handleClientSelect}
-        onAddClient={handleAddClient}
-      />
-      <SidebarInset>
-        <div className="container mx-auto py-8 space-y-8">
+    <div className="container mx-auto py-8 pt-20 space-y-8 px-6">
           {/* Header */}
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-3">
+              <SidebarTrigger className="" />
               <Button
                 variant="outline"
                 size="sm"
@@ -165,11 +150,18 @@ export default function ClientDashboard() {
                 <ArrowLeft className="h-4 w-4" />
                 <span>Back to Dashboard</span>
               </Button>
-              <div>
-                <h1 className="text-3xl font-bold tracking-tight">
+            </div>
+            <div className="flex-1 flex justify-center">
+              <div className="space-y-2 text-center">
+                <h1 className="text-4xl font-bold tracking-tight text-gray-900 dark:text-white">
                   {client?.name || "Loading..."}
                 </h1>
-                <p className="text-muted-foreground">{client?.email}</p>
+                <div className="flex items-center justify-center space-x-2">
+                  <Mail className="h-4 w-4 text-blue-600" />
+                  <p className="text-lg font-medium text-gray-600 dark:text-gray-300">
+                    {client?.email}
+                  </p>
+                </div>
               </div>
             </div>
             <Button onClick={() => setShowInvoiceForm(true)}>
@@ -186,7 +178,5 @@ export default function ClientDashboard() {
             />
           </div>
         </div>
-      </SidebarInset>
-    </SidebarProvider>
   );
 }

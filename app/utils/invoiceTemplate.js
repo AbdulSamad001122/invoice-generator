@@ -70,6 +70,30 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontWeight: "bold",
   },
+  statusContainer: {
+    flexDirection: "column",
+    alignItems: "flex-end",
+    gap: 5,
+  },
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+    fontSize: 10,
+    fontWeight: "bold",
+    color: "#FFFFFF",
+    textAlign: "center",
+    minWidth: 60,
+  },
+  statusPaid: {
+    backgroundColor: "#10B981",
+  },
+  statusPending: {
+    backgroundColor: "#F59E0B",
+  },
+  statusCancelled: {
+    backgroundColor: "#EF4444",
+  },
   // Main content sections
   contentSection: {
     flexDirection: "row",
@@ -129,18 +153,36 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     textAlign: "center",
   },
+  itemNameHeader: {
+    width: "25%",
+    textAlign: "left",
+  },
+  itemNameHeaderWide: {
+    width: "50%",
+    textAlign: "left",
+  },
   descriptionHeader: {
-    width: "40%",
+    width: "25%",
     textAlign: "left",
   },
   qtyHeader: {
     width: "15%",
   },
+  qtyHeaderWide: {
+    width: "16.67%",
+  },
   priceHeader: {
-    width: "20%",
+    width: "17.5%",
+  },
+  priceHeaderWide: {
+    width: "16.67%",
   },
   totalHeader: {
-    width: "25%",
+    width: "17.5%",
+    textAlign: "right",
+  },
+  totalHeaderWide: {
+    width: "16.66%",
     textAlign: "right",
   },
   tableRow: {
@@ -155,18 +197,36 @@ const styles = StyleSheet.create({
     color: "#374151",
     textAlign: "center",
   },
+  itemNameCell: {
+    width: "25%",
+    textAlign: "left",
+  },
+  itemNameCellWide: {
+    width: "50%",
+    textAlign: "left",
+  },
   descriptionCell: {
-    width: "40%",
+    width: "25%",
     textAlign: "left",
   },
   qtyCell: {
     width: "15%",
   },
+  qtyCellWide: {
+    width: "16.67%",
+  },
   priceCell: {
-    width: "20%",
+    width: "17.5%",
+  },
+  priceCellWide: {
+    width: "16.67%",
   },
   totalCell: {
-    width: "25%",
+    width: "17.5%",
+    textAlign: "right",
+  },
+  totalCellWide: {
+    width: "16.66%",
     textAlign: "right",
   },
   // Totals section
@@ -214,45 +274,71 @@ const styles = StyleSheet.create({
   footerSection: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 20,
+    marginTop: 25,
+    marginBottom: 20,
+    paddingHorizontal: 10,
   },
   notesSection: {
-    width: "45%",
+    width: "48%",
+    paddingRight: 15,
   },
   paymentSection: {
-    width: "45%",
-  },
-  thankYouSection: {
-    width: "45%",
-    alignItems: "center",
-    justifyContent: "center",
+    width: "48%",
+    paddingLeft: 15,
   },
   notesTitle: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "bold",
     color: "#374151",
-    marginBottom: 5,
+    marginBottom: 8,
   },
   notesText: {
-    fontSize: 9,
+    fontSize: 10,
     color: "#6B7280",
-    lineHeight: 1.3,
+    lineHeight: 1.4,
+    textAlign: "justify",
   },
   paymentTitle: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "bold",
     color: "#374151",
-    marginBottom: 5,
+    marginBottom: 8,
   },
   paymentText: {
-    fontSize: 9,
+    fontSize: 10,
     color: "#6B7280",
-    marginBottom: 2,
+    marginBottom: 3,
+    lineHeight: 1.3,
   },
-  thankYouText: {
-    fontSize: 24,
+  termsSection: {
+    marginTop: 20,
+    marginBottom: 25,
+    paddingHorizontal: 10,
+  },
+  termsTitle: {
+    fontSize: 12,
     fontWeight: "bold",
     color: "#374151",
+    marginBottom: 8,
+  },
+  termsText: {
+    fontSize: 10,
+    color: "#6B7280",
+    lineHeight: 1.4,
+    textAlign: "justify",
+  },
+  thankYouSection: {
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 20,
+    paddingVertical: 15,
+  },
+  thankYouText: {
+    fontSize: 28,
+    fontWeight: "bold",
+    color: "#1E40AF",
+    textAlign: "center",
   },
 });
 
@@ -262,9 +348,10 @@ const InvoicePDF = ({ invoiceData }) => {
     companyName,
     companyEmail,
     companyLogo,
+    companyCustomFields = [],
     clientName,
-    clientPhone,
     clientEmail,
+    clientCustomFields = [],
     invoiceNumber,
     invoiceDate,
     dueDate,
@@ -272,6 +359,8 @@ const InvoicePDF = ({ invoiceData }) => {
     taxRate,
     discountRate,
     notes,
+    terms,
+    showStatusOnPDF = false,
   } = invoiceData;
 
   // Calculate totals
@@ -287,13 +376,33 @@ const InvoicePDF = ({ invoiceData }) => {
         <View style={styles.headerBackground}>
           <View style={styles.headerContent}>
             <Text style={styles.invoiceTitle}>INVOICE</Text>
-            <Text style={styles.invoiceNumber}>
-              NO: {invoiceNumber || "INV-12345-1"}
-            </Text>
+            <View style={styles.statusContainer}>
+              <Text style={styles.invoiceNumber}>
+                NO: {invoiceNumber || "INV-12345-1"}
+              </Text>
+              {showStatusOnPDF && (
+                <Text
+                  style={[
+                    styles.statusBadge,
+                    invoiceData.status === "PAID"
+                      ? styles.statusPaid
+                      : invoiceData.status === "CANCELLED"
+                      ? styles.statusCancelled
+                      : styles.statusPending,
+                  ]}
+                >
+                  {invoiceData.status || "PENDING"}
+                </Text>
+              )}
+            </View>
           </View>
           {companyLogo && (
             <View style={styles.headerCenter}>
-              <Image src={companyLogo} style={styles.companyLogo} />
+              <Image
+                src={companyLogo}
+                style={styles.companyLogo}
+                alt="Company Logo"
+              />
             </View>
           )}
         </View>
@@ -303,13 +412,36 @@ const InvoicePDF = ({ invoiceData }) => {
           <View style={styles.billToSection}>
             <Text style={styles.sectionTitle}>Bill To:</Text>
             <Text style={styles.text}>{clientName || "Estelle Darcy"}</Text>
-            <Text style={styles.text}>{clientPhone || "+123-456-7890"}</Text>
-            <Text style={styles.text}>{clientEmail || "client@example.com"}</Text>
+            <Text style={styles.text}>
+              {clientEmail || "client@example.com"}
+            </Text>
+            {clientCustomFields.slice(0, 10).map(
+              (field, index) =>
+                field.name &&
+                field.value && (
+                  <Text key={index} style={styles.text}>
+                    {field.name.substring(0, 50)}:{" "}
+                    {field.value.substring(0, 100)}
+                  </Text>
+                )
+            )}
           </View>
           <View style={styles.fromSection}>
             <Text style={styles.sectionTitle}>From:</Text>
             <Text style={styles.text}>{companyName || "Samira Hadid"}</Text>
-            <Text style={styles.text}>{companyEmail || "company@example.com"}</Text>
+            <Text style={styles.text}>
+              {companyEmail || "company@example.com"}
+            </Text>
+            {companyCustomFields.slice(0, 10).map(
+              (field, index) =>
+                field.name &&
+                field.value && (
+                  <Text key={index} style={styles.text}>
+                    {field.name.substring(0, 50)}:{" "}
+                    {field.value.substring(0, 100)}
+                  </Text>
+                )
+            )}
           </View>
         </View>
 
@@ -321,20 +453,59 @@ const InvoicePDF = ({ invoiceData }) => {
               {invoiceDate || "26 June 2022"}
             </Text>
           </View>
+          <View style={styles.dateItem}>
+            <Text style={styles.dateLabel}>Due Date:</Text>
+            <Text style={styles.dateValue}>{dueDate || "26 July 2022"}</Text>
+          </View>
         </View>
 
         {/* Items Table */}
         <View style={styles.table}>
           {/* Table Header */}
           <View style={styles.tableHeader}>
-            <Text style={[styles.tableHeaderCell, styles.descriptionHeader]}>
-              Description
+            <Text
+              style={[
+                styles.tableHeaderCell,
+                invoiceData.includeDescription
+                  ? styles.itemNameHeader
+                  : styles.itemNameHeaderWide,
+              ]}
+            >
+              Item Name
             </Text>
-            <Text style={[styles.tableHeaderCell, styles.qtyHeader]}>Qty</Text>
-            <Text style={[styles.tableHeaderCell, styles.priceHeader]}>
+            {invoiceData.includeDescription && (
+              <Text style={[styles.tableHeaderCell, styles.descriptionHeader]}>
+                Description
+              </Text>
+            )}
+            <Text
+              style={[
+                styles.tableHeaderCell,
+                invoiceData.includeDescription
+                  ? styles.qtyHeader
+                  : styles.qtyHeaderWide,
+              ]}
+            >
+              Qty
+            </Text>
+            <Text
+              style={[
+                styles.tableHeaderCell,
+                invoiceData.includeDescription
+                  ? styles.priceHeader
+                  : styles.priceHeaderWide,
+              ]}
+            >
               Price
             </Text>
-            <Text style={[styles.tableHeaderCell, styles.totalHeader]}>
+            <Text
+              style={[
+                styles.tableHeaderCell,
+                invoiceData.includeDescription
+                  ? styles.totalHeader
+                  : styles.totalHeaderWide,
+              ]}
+            >
               Total
             </Text>
           </View>
@@ -343,16 +514,49 @@ const InvoicePDF = ({ invoiceData }) => {
           {items && items.length > 0
             ? items.map((item, index) => (
                 <View style={styles.tableRow} key={index}>
-                  <Text style={[styles.tableCell, styles.descriptionCell]}>
-                    {item.description || "Your Description"}
+                  <Text
+                    style={[
+                      styles.tableCell,
+                      invoiceData.includeDescription
+                        ? styles.itemNameCell
+                        : styles.itemNameCellWide,
+                    ]}
+                  >
+                    {item.itemName || "Your Item Name"}
                   </Text>
-                  <Text style={[styles.tableCell, styles.qtyCell]}>
+                  {invoiceData.includeDescription && (
+                    <Text style={[styles.tableCell, styles.descriptionCell]}>
+                      {item.description || ""}
+                    </Text>
+                  )}
+                  <Text
+                    style={[
+                      styles.tableCell,
+                      invoiceData.includeDescription
+                        ? styles.qtyCell
+                        : styles.qtyCellWide,
+                    ]}
+                  >
                     {item.quantity || 1}
                   </Text>
-                  <Text style={[styles.tableCell, styles.priceCell]}>
+                  <Text
+                    style={[
+                      styles.tableCell,
+                      invoiceData.includeDescription
+                        ? styles.priceCell
+                        : styles.priceCellWide,
+                    ]}
+                  >
                     $ {(item.rate || 0).toFixed(2)}
                   </Text>
-                  <Text style={[styles.tableCell, styles.totalCell]}>
+                  <Text
+                    style={[
+                      styles.tableCell,
+                      invoiceData.includeDescription
+                        ? styles.totalCell
+                        : styles.totalCellWide,
+                    ]}
+                  >
                     $ {(item.amount || 0).toFixed(2)}
                   </Text>
                 </View>
@@ -360,14 +564,49 @@ const InvoicePDF = ({ invoiceData }) => {
             : // Default rows if no items
               Array.from({ length: 6 }, (_, index) => (
                 <View style={styles.tableRow} key={index}>
-                  <Text style={[styles.tableCell, styles.descriptionCell]}>
-                    Your Description
+                  <Text
+                    style={[
+                      styles.tableCell,
+                      invoiceData.includeDescription
+                        ? styles.itemNameCell
+                        : styles.itemNameCellWide,
+                    ]}
+                  >
+                    Your Item Name
                   </Text>
-                  <Text style={[styles.tableCell, styles.qtyCell]}>1</Text>
-                  <Text style={[styles.tableCell, styles.priceCell]}>
+                  {invoiceData.includeDescription && (
+                    <Text
+                      style={[styles.tableCell, styles.descriptionCell]}
+                    ></Text>
+                  )}
+                  <Text
+                    style={[
+                      styles.tableCell,
+                      invoiceData.includeDescription
+                        ? styles.qtyCell
+                        : styles.qtyCellWide,
+                    ]}
+                  >
+                    1
+                  </Text>
+                  <Text
+                    style={[
+                      styles.tableCell,
+                      invoiceData.includeDescription
+                        ? styles.priceCell
+                        : styles.priceCellWide,
+                    ]}
+                  >
                     $ 0.00
                   </Text>
-                  <Text style={[styles.tableCell, styles.totalCell]}>
+                  <Text
+                    style={[
+                      styles.tableCell,
+                      invoiceData.includeDescription
+                        ? styles.totalCell
+                        : styles.totalCellWide,
+                    ]}
+                  >
                     $ 0.00
                   </Text>
                 </View>
@@ -407,9 +646,10 @@ const InvoicePDF = ({ invoiceData }) => {
         {/* Footer Section */}
         <View style={styles.footerSection}>
           <View style={styles.notesSection}>
-            <Text style={styles.notesTitle}>Note:</Text>
+            <Text style={styles.notesTitle}>Notes:</Text>
             <Text style={styles.notesText}>
-              {notes || "Thank you for your business!"}
+              {notes ||
+                "Thank you for your business! We appreciate your trust in our services and look forward to working with you again."}
             </Text>
           </View>
           <View style={styles.paymentSection}>
@@ -421,9 +661,19 @@ const InvoicePDF = ({ invoiceData }) => {
               Account: {invoiceData.bankAccount || "123-456-7890"}
             </Text>
           </View>
-          <View style={styles.thankYouSection}>
-            <Text style={styles.thankYouText}>Thank You!</Text>
+        </View>
+
+        {/* Terms and Conditions Section */}
+        {terms && (
+          <View style={styles.termsSection}>
+            <Text style={styles.termsTitle}>Terms and Conditions:</Text>
+            <Text style={styles.termsText}>{terms}</Text>
           </View>
+        )}
+
+        {/* Thank You Section - Centered at the end */}
+        <View style={styles.thankYouSection}>
+          <Text style={styles.thankYouText}>Thank You!</Text>
         </View>
       </Page>
     </Document>

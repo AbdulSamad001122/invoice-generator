@@ -23,53 +23,136 @@ enum InvoiceStatus {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  clerkId   String   @unique @map("clerk_id")
-  name      String
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id           String   @id @default(cuid())
+  clerkId      String   @unique @map("clerk_id")
+  name         String
+  companyName  String?  @map("company_name")
+  companyEmail String?  @map("company_email")
+  companyLogo  String?  @map("company_logo")
+  bankName     String?  @map("bank_name")
+  bankAccount  String?  @map("bank_account")
+  defaultDueDays Int?   @map("default_due_days")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   // Relations
-  clients  Client[]
-  invoices Invoice[]
+  clients          Client[]
+  invoices         Invoice[]
+  invoiceTemplates InvoiceTemplate[]
+  items            Item[]
 
+  // Indexes
+  @@index([clerkId])
+  @@index([createdAt])
   @@map("users")
 }
 
 model Client {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  userClerkId String  @map("user_clerk_id")
+  id                   String   @id @default(cuid())
+  userId               String   @map("user_id")
+  userClerkId          String?  @map("user_clerk_id")
+  name                 String
+  email                String?
+  autoRenumberInvoices Boolean  @default(true) @map("auto_renumber_invoices")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoices    Invoice[]
+  itemClients ItemClient[]
+
+  @@unique([userId, email])
+  // Indexes
+  @@index([userId])
+  @@index([userClerkId])
+  @@index([userId, name])
+  @@index([userId, email])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("clients")
+}
+
+model Invoice {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  clientId   String   @map("client_id")
+  templateId String?  @map("template_id")
+  data       Json     // Complete invoice JSON from frontend
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client   Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  template InvoiceTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  // Indexes
+  @@index([userId])
+  @@index([clientId])
+  @@index([templateId])
+  @@index([clientId, createdAt(sort: Desc)])
+  @@index([userId, clientId])
+  @@map("invoices")
+}
+
+model InvoiceTemplate {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
   name      String
-  email     String?
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  category  String
+  isActive  Boolean   @default(true)
+  isDefault Boolean   @default(false)
+  preview   String?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
 
   // Relations
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   invoices Invoice[]
 
-  @@unique([userId, email])
   // Indexes
+  @@index([category])
+  @@index([isActive])
+  @@index([isDefault])
   @@index([userId])
-  @@map("clients")
+  @@map("invoice_templates")
 }
 
-model Invoice {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  clientId  String   @map("client_id")
-  data      Json // Complete invoice JSON from frontend
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+model Item {
+  id               String       @id @default(cuid())
+  userId           String       @map("user_id")
+  name             String
+  price            Decimal      @db.Decimal(10, 2)
+  description      String?
+  isForAllClients  Boolean      @default(false) @map("is_for_all_clients")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
 
   // Relations
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  itemClients ItemClient[]
+
+  // Indexes
+  @@index([userId])
+  @@index([isForAllClients])
+  @@index([userId, name])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, isForAllClients])
+  @@map("items")
+}
+
+model ItemClient {
+  id       String @id @default(cuid())
+  itemId   String @map("item_id")
+  clientId String @map("client_id")
+
+  // Relations
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   // Indexes
-  @@index([userId])
+  @@unique([itemId, clientId])
+  @@index([itemId])
   @@index([clientId])
-  @@index([userId, clientId])
-  @@map("invoices")
+  @@map("item_clients")
 }
