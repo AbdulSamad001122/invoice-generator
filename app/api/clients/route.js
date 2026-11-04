@@ -92,32 +92,32 @@ export async function GET(request) {
         50 // Max 50 clients per page
       );
 
-      // Get total count for pagination metadata
-      const totalCount = await prisma.client.count({
-        where: {
-          userId: dbUser.id,
-        },
-      });
-
-      // Fetch clients for this user with pagination
-      const clients = await prisma.client.findMany({
-        where: {
-          userId: dbUser.id,
-        },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          autoRenumberInvoices: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-        skip: offset,
-        take: limit,
-      });
+      // Count and page query run in parallel (one round-trip instead of two)
+      const [totalCount, clients] = await Promise.all([
+        prisma.client.count({
+          where: {
+            userId: dbUser.id,
+          },
+        }),
+        prisma.client.findMany({
+          where: {
+            userId: dbUser.id,
+          },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            autoRenumberInvoices: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+          orderBy: {
+            createdAt: "desc",
+          },
+          skip: offset,
+          take: limit,
+        }),
+      ]);
 
       const totalPages = Math.ceil(totalCount / limit);
       const hasMore = page < totalPages;
@@ -269,47 +269,42 @@ export async function PUT(request) {
       );
     }
 
-    // Update client in database
-    const updatedClient = await prisma.client.update({
-      where: { id },
-      data: {
-        name: nameValidation.value,
-        email: emailValidation.value,
-      },
-    });
+    // Update client in database (only if it belongs to the authenticated user)
+    let updatedClient;
+    try {
+      updatedClient = await prisma.client.update({
+        where: { id, userId: dbUser.id },
+        data: {
+          name: nameValidation.value,
+          email: emailValidation.value,
+        },
+      });
+    } catch (updateError) {
+      if (updateError.code === "P2025") {
+        return NextResponse.json(
+          { error: "Client not found" },
+          { status: 404 }
+        );
+      }
+      throw updateError;
+    }
 
     // If updateOption is 'allInvoices', update all invoices with new client data
     if (updateOption === "allInvoices") {
-      // Get all invoices for this client
-      const invoices = await prisma.invoice.findMany({
-        where: {
-          clientId: id,
-          userId: dbUser.id,
-        },
-        select: {
-          id: true,
-          data: true, // Only need id and data for updating
-        },
+      // Merge the new client details into every invoice's JSON in one statement
+      // (previously one UPDATE per invoice)
+      const patch = JSON.stringify({
+        clientName: nameValidation.value,
+        clientEmail: emailValidation.value,
       });
-
-      // Update each invoice's data with new client information
-      for (const invoice of invoices) {
-        const invoiceData = invoice.data;
-
-        // Update client information in invoice data
-        if (invoiceData && typeof invoiceData === "object") {
-          const updatedInvoiceData = {
-            ...invoiceData,
-            clientName: nameValidation.value,
-            clientEmail: emailValidation.value,
-          };
-
-          await prisma.invoice.update({
-            where: { id: invoice.id },
-            data: { data: updatedInvoiceData },
-          });
-        }
-      }
+      await prisma.$executeRaw`
+        UPDATE invoices
+        SET data = data || ${patch}::jsonb,
+            updated_at = NOW()
+        WHERE client_id = ${id}
+          AND user_id = ${dbUser.id}
+          AND jsonb_typeof(data) = 'object'
+      `;
     }
 
     return NextResponse.json(updatedClient);

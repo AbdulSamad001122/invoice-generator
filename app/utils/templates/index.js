@@ -7,60 +7,29 @@ import YellowClassicTemplate from "./yellow-classic-template";
 import GreenModernTemplate from "./green-modern-template";
 import GreenClassicTemplate from "./green-classic-template";
 
-// Template registry - add new templates here
-export const INVOICE_TEMPLATES = {
-  "blue-modern": {
-    id: "blue-modern",
-    name: "Blue Modern",
-    description: "Professional blue template with curved header",
-    component: BlueModernTemplate,
-    preview: "/templates/blue-modern-preview.png", // Add preview images later
-  },
-  "yellow-classic": {
-    id: "yellow-classic",
-    name: "Yellow Classic",
-    description: "Classic yellow template with clean layout",
-    component: YellowClassicTemplate,
-    preview: "/templates/yellow-classic-preview.png",
-  },
-  "green-modern": {
-    id: "green-modern",
-    name: "Green Modern",
-    description: "Fresh and vibrant green-themed template",
-    component: GreenModernTemplate,
-    preview: "/templates/green-modern-preview.png",
-  },
-  "green-classic": {
-    id: "green-classic",
-    name: "Green Classic",
-    description: "Classic green template with professional layout",
-    component: GreenClassicTemplate,
-    preview: "/templates/green-classic-preview.png",
-  },
+// Template registry - add new templates here (metadata lives in ./registry.js)
+import {
+  TEMPLATE_METADATA,
+  DEFAULT_TEMPLATE,
+  getDefaultTemplate,
+  setDefaultTemplate,
+} from "./registry";
+
+export { DEFAULT_TEMPLATE, getDefaultTemplate, setDefaultTemplate };
+
+const TEMPLATE_COMPONENTS = {
+  "blue-modern": BlueModernTemplate,
+  "yellow-classic": YellowClassicTemplate,
+  "green-modern": GreenModernTemplate,
+  "green-classic": GreenClassicTemplate,
 };
 
-// Default template - can be changed by user
-const INITIAL_DEFAULT_TEMPLATE = "blue-modern";
-
-// Get user's preferred default template from localStorage
-export const getDefaultTemplate = () => {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('defaultTemplate') || INITIAL_DEFAULT_TEMPLATE;
-  }
-  return INITIAL_DEFAULT_TEMPLATE;
-};
-
-// Set user's preferred default template
-export const setDefaultTemplate = (templateId) => {
-  if (typeof window !== 'undefined' && INVOICE_TEMPLATES[templateId]) {
-    localStorage.setItem('defaultTemplate', templateId);
-    return true;
-  }
-  return false;
-};
-
-// For backward compatibility
-export const DEFAULT_TEMPLATE = getDefaultTemplate();
+export const INVOICE_TEMPLATES = Object.fromEntries(
+  Object.entries(TEMPLATE_METADATA).map(([id, meta]) => [
+    id,
+    { ...meta, component: TEMPLATE_COMPONENTS[id] },
+  ])
+);
 
 // Get all available templates
 export const getAvailableTemplates = () => {

@@ -11,40 +11,23 @@ import prisma from '@/lib/prisma';
  */
 export async function renumberClientInvoices(clientId, userId) {
   try {
-    // Get all invoices for the client, ordered by creation date
-    const invoices = await prisma.invoice.findMany({
-      where: {
-        clientId: clientId,
-        userId: userId,
-      },
-      orderBy: {
-        createdAt: 'asc',
-      },
-    });
+    // One statement renumbers every invoice for the client in creation order
+    // (INV-1, INV-2, ...), and only writes rows whose number actually changes.
+    // Previously this was one UPDATE per invoice.
+    const updatedCount = await prisma.$executeRaw`
+      UPDATE invoices AS i
+      SET data = jsonb_set(i.data, '{invoiceNumber}', to_jsonb('INV-' || r.rn::text), true),
+          updated_at = NOW()
+      FROM (
+        SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS rn
+        FROM invoices
+        WHERE client_id = ${clientId} AND user_id = ${userId}
+      ) AS r
+      WHERE i.id = r.id
+        AND (i.data->>'invoiceNumber') IS DISTINCT FROM ('INV-' || r.rn::text)
+    `;
 
-    // Update each invoice with sequential numbering
-    const updatePromises = invoices.map(async (invoice, index) => {
-      const newInvoiceNumber = `INV-${index + 1}`;
-      
-      // Parse the existing data and update the invoice number
-      const invoiceData = typeof invoice.data === 'string' 
-        ? JSON.parse(invoice.data) 
-        : invoice.data;
-      
-      const updatedData = {
-        ...invoiceData,
-        invoiceNumber: newInvoiceNumber,
-      };
-
-      return prisma.invoice.update({
-        where: { id: invoice.id },
-        data: { data: updatedData },
-      });
-    });
-
-    await Promise.all(updatePromises);
-    
-    console.log(`Successfully renumbered ${invoices.length} invoices for client ${clientId}`);
+    console.log(`Renumbered invoices for client ${clientId} (${updatedCount} changed)`);
   } catch (error) {
     console.error('Error renumbering invoices:', error);
     throw new Error('Failed to renumber invoices');
@@ -60,47 +43,27 @@ export async function renumberClientInvoices(clientId, userId) {
  */
 export async function generateNextInvoiceNumber(clientId, userId, autoRenumber = true) {
   try {
-    const invoiceCount = await prisma.invoice.count({
-      where: {
-        clientId: clientId,
-        userId: userId,
-      },
-    });
-
     if (autoRenumber) {
       // For auto-renumbering clients, always use sequential numbering
-      return `INV-${invoiceCount + 1}`;
-    } else {
-      // For non-auto-renumbering clients, find the highest existing number and add 1
-      const invoices = await prisma.invoice.findMany({
+      const invoiceCount = await prisma.invoice.count({
         where: {
           clientId: clientId,
           userId: userId,
         },
-        select: {
-          data: true,
-        },
       });
-
-      let maxNumber = 0;
-      invoices.forEach(invoice => {
-        const invoiceData = typeof invoice.data === 'string' 
-          ? JSON.parse(invoice.data) 
-          : invoice.data;
-        
-        if (invoiceData.invoiceNumber) {
-          const match = invoiceData.invoiceNumber.match(/INV-(\d+)/);
-          if (match) {
-            const number = parseInt(match[1], 10);
-            if (number > maxNumber) {
-              maxNumber = number;
-            }
-          }
-        }
-      });
-
-      return `INV-${maxNumber + 1}`;
+      return `INV-${invoiceCount + 1}`;
     }
+
+    // For non-auto-renumbering clients, the database finds the highest
+    // "INV-<number>" in one query instead of downloading every invoice.
+    const [row] = await prisma.$queryRaw`
+      SELECT COALESCE(MAX((substring(data->>'invoiceNumber' from 'INV-([0-9]+)'))::bigint), 0) AS max_number
+      FROM invoices
+      WHERE client_id = ${clientId} AND user_id = ${userId}
+    `;
+    const maxNumber = Number(row?.max_number ?? 0);
+
+    return `INV-${maxNumber + 1}`;
   } catch (error) {
     console.error('Error generating invoice number:', error);
     throw new Error('Failed to generate invoice number');

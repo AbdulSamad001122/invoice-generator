@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
 import { useUser } from "@clerk/nextjs";
 
@@ -32,6 +32,15 @@ export function ItemProvider({ children }) {
   // Cache duration: 5 minutes
   const CACHE_DURATION = 5 * 60 * 1000;
 
+  // Refs mirror state so callbacks read the latest values synchronously
+  // (reading state through setState updaters is unreliable in React 18+).
+  const userId = user?.id;
+  const paginationRef = useRef(pagination);
+  const loadingMoreRef = useRef(false);
+  useEffect(() => { paginationRef.current = pagination; }, [pagination]);
+  const lastFetchRef = useRef(null);
+  const hasFetchedRef = useRef(false);
+
   const fetchItems = useCallback(async (force = false, reset = false) => {
     if (!isLoaded || !user) {
       console.log("ItemContext: User not loaded or not authenticated", {
@@ -44,13 +53,13 @@ export function ItemProvider({ children }) {
 
     // Check cache validity for initial load
     const now = Date.now();
-    if (!force && !reset && lastFetch && (now - lastFetch) < CACHE_DURATION && items.length > 0) {
+    if (!force && !reset && hasFetchedRef.current && lastFetchRef.current && (now - lastFetchRef.current) < CACHE_DURATION) {
       console.log("ItemContext: Using cached data");
       return;
     }
 
     try {
-      const isInitialLoad = reset || items.length === 0;
+      const isInitialLoad = reset || !hasFetchedRef.current;
       if (isInitialLoad) {
         console.log("ItemContext: Fetching items from API");
         setLoading(true);
@@ -58,8 +67,8 @@ export function ItemProvider({ children }) {
       }
       
       setError(null);
-      const page = reset ? 1 : pagination.page;
-      const response = await axios.get(`/api/items?page=${page}&limit=${pagination.limit}`);
+      const page = isInitialLoad ? 1 : paginationRef.current.page;
+      const response = await axios.get(`/api/items?page=${page}&limit=${paginationRef.current.limit}`);
       console.log("ItemContext: Received items:", response.data);
       
       if (reset || isInitialLoad) {
@@ -76,6 +85,8 @@ export function ItemProvider({ children }) {
         hasMore: response.data.pagination.hasMore,
       });
       
+      hasFetchedRef.current = true;
+      lastFetchRef.current = now;
       setLastFetch(now);
     } catch (err) {
       console.error("ItemContext: Error fetching items:", err);
@@ -83,26 +94,14 @@ export function ItemProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [isLoaded, user, lastFetch, CACHE_DURATION]);
+  }, [isLoaded, userId, CACHE_DURATION]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMoreItems = useCallback(async () => {
-    let currentPagination = null;
-    let isCurrentlyLoading = false;
-    
-    // Get current state values using functional updates
-    setPagination(prev => {
-      currentPagination = prev;
-      return prev;
-    });
-    
-    setLoadingMore(prev => {
-      isCurrentlyLoading = prev;
-      return prev;
-    });
-    
-    if (!currentPagination.hasMore || isCurrentlyLoading) return;
+    const currentPagination = paginationRef.current;
+    if (!currentPagination.hasMore || loadingMoreRef.current) return;
 
     try {
+      loadingMoreRef.current = true;
       setLoadingMore(true);
       setError(null);
       const nextPage = currentPagination.page + 1;
@@ -120,6 +119,7 @@ export function ItemProvider({ children }) {
       console.error("ItemContext: Error loading more items:", err);
       setError("Failed to load more items");
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
   }, []);
@@ -194,12 +194,8 @@ export function ItemProvider({ children }) {
     fetchItems(true, true); // force refresh and reset pagination
   };
 
-  // Fetch items when user is loaded
-  useEffect(() => {
-    if (isLoaded) {
-      fetchItems();
-    }
-  }, [isLoaded, user]);
+  // Items are loaded on demand by the pages that show them (see item-list.jsx),
+  // instead of on every page load across the app.
 
   const value = {
     items,

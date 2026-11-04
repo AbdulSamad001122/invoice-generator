@@ -40,10 +40,13 @@ import {
   CheckCircle,
   Copy,
 } from "lucide-react";
-import { pdf } from "@react-pdf/renderer";
-import InvoicePDF from "@/app/utils/invoiceTemplate";
-import { getTemplateComponent, DEFAULT_TEMPLATE, getTemplateById } from "@/app/utils/templates";
+import { DEFAULT_TEMPLATE, getTemplateById } from "@/app/utils/templates/registry";
+import { renderInvoicePdfBlob } from "@/app/utils/pdfRenderer";
 import { prepareInvoiceDataForPDF } from "@/app/utils/imageToBase64";
+import {
+  calculateItemsSubtotal,
+  prepareItemsForPDF,
+} from "@/app/utils/invoiceItems";
 import { useInvoices } from "@/contexts/InvoiceContext";
 
 export default function InvoiceList({ clientId, onEditInvoice }) {
@@ -80,17 +83,32 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
   const fetchError = error[clientId] || null;
   const clientPagination = pagination[clientId] || { hasMore: false };
 
+  // Load invoices when the client changes (uses the 2-minute cache if fresh)
   useEffect(() => {
     if (clientId) {
-      fetchInvoices(clientId, true); // Reset pagination when client changes
+      fetchInvoices(clientId);
     }
   }, [clientId, fetchInvoices]);
+
+  // Remember which search was last sent so the debounce below only
+  // fires when the user actually changes a filter
+  const lastSearchKeyRef = useRef(null);
 
   // Debounced search effect to prevent excessive API calls
   useEffect(() => {
     if (!clientId) return;
-    
+
+    const searchKey = `${clientId}|${searchTerm}|${searchDate}|${searchStatus}`;
+    const isEmptySearch = !searchTerm && !searchDate && !searchStatus;
+    if (lastSearchKeyRef.current === null || lastSearchKeyRef.current.split("|")[0] !== clientId) {
+      // First render for this client: the effect above already loads the list
+      lastSearchKeyRef.current = searchKey;
+      if (isEmptySearch) return;
+    }
+    if (lastSearchKeyRef.current === searchKey && isEmptySearch) return;
+
     const timeoutId = setTimeout(() => {
+      lastSearchKeyRef.current = searchKey;
       const searchParams = {
         search: searchTerm,
         date: searchDate,
@@ -129,14 +147,7 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
         invoiceDate: invoiceData.issueDate || invoiceData.invoiceDate || "",
         dueDate: invoiceData.dueDate || "",
         status: invoiceData.status || "PENDING",
-        items:
-          invoiceData.items?.map((item) => ({
-            itemName: item.itemName || "",
-            description: item.description || "",
-            quantity: item.quantity || 0,
-            rate: item.rate || 0,
-            amount: (item.quantity || 0) * (item.rate || 0),
-          })) || [],
+        items: prepareItemsForPDF(invoiceData.items),
         includeDescription: invoiceData.includeDescription || false,
         taxRate: invoiceData.taxRate || 0,
         discountRate: invoiceData.discountRate || 0,
@@ -153,10 +164,7 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
 
       // Generate and download the PDF using selected template
       const selectedTemplate = invoiceData.selectedTemplate || DEFAULT_TEMPLATE;
-      const TemplateComponent = getTemplateComponent(selectedTemplate);
-      const blob = await pdf(
-        <TemplateComponent invoiceData={preparedPdfData} />
-      ).toBlob();
+      const blob = await renderInvoicePdfBlob(selectedTemplate, preparedPdfData);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -248,9 +256,7 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
     const invoiceData = invoice.data || {};
     if (!invoiceData.items || !Array.isArray(invoiceData.items)) return 0;
 
-    const subtotal = invoiceData.items.reduce((total, item) => {
-      return total + item.quantity * item.rate;
-    }, 0);
+    const subtotal = calculateItemsSubtotal(invoiceData.items);
 
     const taxAmount = (subtotal * (invoiceData.taxRate || 0)) / 100;
     const discountAmount = (subtotal * (invoiceData.discountRate || 0)) / 100;

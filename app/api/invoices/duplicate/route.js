@@ -49,6 +49,18 @@ export async function POST(request) {
     const autoRenumberEnabled = await isAutoRenumberingEnabled(originalInvoice.clientId, user.id);
     const newInvoiceNumber = await generateNextInvoiceNumber(originalInvoice.clientId, user.id, autoRenumberEnabled);
 
+    // Read the due-days setting fresh (the cached user may be up to 5 minutes stale)
+    const profile = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { defaultDueDays: true },
+    });
+    const dueDays = Number.isInteger(profile?.defaultDueDays) && profile.defaultDueDays >= 0
+      ? profile.defaultDueDays
+      : 30;
+    const today = new Date();
+    const issueDate = today.toISOString().split('T')[0];
+    const dueDate = new Date(today.getTime() + dueDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
     // Create duplicate invoice with new invoice number and current date
     const duplicatedInvoice = await prisma.invoice.create({
       data: {
@@ -57,8 +69,9 @@ export async function POST(request) {
         data: {
           ...originalInvoice.data,
           invoiceNumber: newInvoiceNumber,
-          invoiceDate: new Date().toISOString().split('T')[0], // Current date
-          dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 30 days from now
+          invoiceDate: issueDate,
+          issueDate, // The invoice form reads issueDate
+          dueDate, // Uses the user's default due days (falls back to 30)
         },
       },
       include: {

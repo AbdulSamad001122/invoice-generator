@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
 import { useUser } from "@clerk/nextjs";
 
@@ -31,6 +31,13 @@ export function ClientProvider({ children }) {
 
   // Cache duration: 5 minutes
   const CACHE_DURATION = 5 * 60 * 1000;
+
+  // Refs mirror state so callbacks read the latest values synchronously
+  // (reading state through setState updaters is unreliable in React 18+).
+  const userId = user?.id;
+  const paginationRef = useRef(pagination);
+  const loadingMoreRef = useRef(false);
+  useEffect(() => { paginationRef.current = pagination; }, [pagination]);
 
   const fetchClients = useCallback(async (force = false, reset = false) => {
     if (!isLoaded || !user) return;
@@ -77,23 +84,11 @@ export function ClientProvider({ children }) {
   }, [isLoaded, user, lastFetch, CACHE_DURATION]);
 
   const loadMoreClients = useCallback(async () => {
-    let currentPagination = null;
-    let isCurrentlyLoading = false;
-    
-    // Get current state values using functional updates
-    setPagination(prev => {
-      currentPagination = prev;
-      return prev;
-    });
-    
-    setLoadingMore(prev => {
-      isCurrentlyLoading = prev;
-      return prev;
-    });
-    
-    if (!currentPagination.hasMore || isCurrentlyLoading) return;
+    const currentPagination = paginationRef.current;
+    if (!currentPagination.hasMore || loadingMoreRef.current) return;
 
     try {
+      loadingMoreRef.current = true;
       setLoadingMore(true);
       setError(null);
       const nextPage = currentPagination.page + 1;
@@ -111,6 +106,7 @@ export function ClientProvider({ children }) {
       console.error('Error loading more clients:', err);
       setError('Failed to load more clients');
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
   }, []);
@@ -180,10 +176,10 @@ export function ClientProvider({ children }) {
 
   // Initial fetch when user is loaded
   useEffect(() => {
-    if (isLoaded && user) {
+    if (isLoaded && userId) {
       fetchClients();
     }
-  }, [isLoaded, user]);
+  }, [isLoaded, userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const value = {
     clients,

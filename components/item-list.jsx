@@ -38,7 +38,12 @@ import { useItems } from "@/contexts/ItemContext";
 import { ItemForm } from "./item-form";
 
 export function ItemList({ selectedClients = [], showAllClients = false }) {
-  const { items, loading, loadingMore, pagination, deleteItem, loadMoreItems } = useItems();
+  const { items, loading, loadingMore, pagination, deleteItem, loadMoreItems, fetchItems } = useItems();
+
+  // Load items when this list is shown (cached for 5 minutes in ItemContext)
+  useEffect(() => {
+    fetchItems();
+  }, [fetchItems]);
   const itemsContainerRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [showItemForm, setShowItemForm] = useState(false);

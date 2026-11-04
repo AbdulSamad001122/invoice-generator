@@ -105,14 +105,14 @@ export async function GET(request) {
         100 // Max 100 items per page
       );
 
-      // Get total count for pagination metadata
-      const totalCount = await prisma.item.count({
-        where: {
-          userId: user.id,
-        },
-      });
-
-      const items = await prisma.item.findMany({
+      // Count and page query run in parallel (one round-trip instead of two)
+      const [totalCount, items] = await Promise.all([
+        prisma.item.count({
+          where: {
+            userId: user.id,
+          },
+        }),
+        prisma.item.findMany({
         where: {
           userId: user.id,
         },
@@ -141,7 +141,8 @@ export async function GET(request) {
         },
         skip: offset,
         take: limit,
-      });
+        }),
+      ]);
 
       const totalPages = Math.ceil(totalCount / limit);
       const hasMore = page < totalPages;

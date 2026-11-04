@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { getCachedUser } from "@/lib/userCache";
+import { getCachedUser, clearUserCache } from "@/lib/userCache";
 import prisma from "@/lib/prisma";
 import { 
   validateName, 
@@ -142,46 +142,29 @@ export async function POST(request) {
       },
     });
 
+    // Drop the cached user so the next request sees the new profile values
+    clearUserCache(userId);
+
     // If updateOption is "allInvoices", update all existing invoices with new company info
     let updatedInvoicesCount = 0;
     if (updateOption === "allInvoices") {
-      // Get all invoices for this user
-      const invoices = await prisma.invoice.findMany({
-        where: {
-          client: {
-            userId: dbUser.id,
-          },
-        },
-        select: {
-          id: true,
-          data: true,
-        },
+      // Merge the new company details into every invoice's JSON in one statement
+      // (previously one UPDATE per invoice)
+      const patch = JSON.stringify({
+        companyName: updatedUser.companyName,
+        companyEmail: updatedUser.companyEmail,
+        companyLogo: updatedUser.companyLogo,
+        bankName: updatedUser.bankName,
+        bankAccount: updatedUser.bankAccount,
+        defaultDueDays: updatedUser.defaultDueDays,
       });
-
-      // Update each invoice's data with new company information
-      for (const invoice of invoices) {
-        const invoiceData = invoice.data;
-
-        // Update company information in invoice data
-        if (invoiceData && typeof invoiceData === "object") {
-          const updatedInvoiceData = {
-            ...invoiceData,
-            companyName: nameValidation.value,
-            companyEmail: emailValidation.value,
-            companyLogo: companyLogo ? sanitizeString(companyLogo, 10000) : null,
-            bankName: bankName ? sanitizeString(bankName, 100) : null,
-            bankAccount: bankAccount ? sanitizeString(bankAccount, 100) : null,
-            defaultDueDays: defaultDueDays && String(defaultDueDays).trim() !== '' ? parseInt(defaultDueDays) : null,
-          };
-
-          await prisma.invoice.update({
-            where: { id: invoice.id },
-            data: { data: updatedInvoiceData },
-          });
-          
-          updatedInvoicesCount++;
-        }
-      }
+      updatedInvoicesCount = await prisma.$executeRaw`
+        UPDATE invoices
+        SET data = data || ${patch}::jsonb,
+            updated_at = NOW()
+        WHERE user_id = ${dbUser.id}
+          AND jsonb_typeof(data) = 'object'
+      `;
     }
     
 

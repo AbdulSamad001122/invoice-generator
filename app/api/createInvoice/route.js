@@ -21,11 +21,21 @@ export async function POST(request) {
       );
     }
 
-    console.log("Client ID:", clientId);
-    console.log("Invoice data:", invoiceData);
-
     // Use cached user lookup to reduce database queries
     const user = await getCachedUser(userId);
+
+    // Verify the client belongs to the authenticated user
+    const client = await prisma.client.findFirst({
+      where: { id: clientId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!client) {
+      return NextResponse.json(
+        { error: "Client not found" },
+        { status: 404 }
+      );
+    }
 
     // Create new invoice in database
     const newInvoice = await prisma.invoice.create({

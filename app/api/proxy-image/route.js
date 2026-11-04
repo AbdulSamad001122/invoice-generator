@@ -1,7 +1,31 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
+
+// Only these hosts may be fetched through the proxy
+const ALLOWED_IMAGE_HOSTS = new Set(['res.cloudinary.com']);
+
+function isAllowedImageUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === 'https:' &&
+      ALLOWED_IMAGE_HOSTS.has(parsed.hostname) &&
+      !parsed.username &&
+      !parsed.password &&
+      (parsed.port === '' || parsed.port === '443')
+    );
+  } catch {
+    return false;
+  }
+}
 
 export async function GET(request) {
   try {
+    const { userId } = await auth();
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const imageUrl = searchParams.get('url');
 
@@ -13,7 +37,7 @@ export async function GET(request) {
     }
 
     // Validate that it's a Cloudinary URL for security
-    if (!imageUrl.includes('cloudinary.com')) {
+    if (!isAllowedImageUrl(imageUrl)) {
       return NextResponse.json(
         { error: 'Only Cloudinary URLs are allowed' },
         { status: 400 }
@@ -26,7 +50,9 @@ export async function GET(request) {
     const response = await fetch(imageUrl, {
       headers: {
         'User-Agent': 'Invoice-Generator-Proxy/1.0'
-      }
+      },
+      // Don't follow redirects, which could point outside the allowed host
+      redirect: 'error',
     });
 
     if (!response.ok) {
@@ -34,6 +60,14 @@ export async function GET(request) {
       return NextResponse.json(
         { error: 'Failed to fetch image' },
         { status: response.status }
+      );
+    }
+
+    const upstreamType = response.headers.get('content-type') || '';
+    if (!upstreamType.startsWith('image/')) {
+      return NextResponse.json(
+        { error: 'URL did not return an image' },
+        { status: 400 }
       );
     }
 

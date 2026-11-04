@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Check, Eye, Palette, FileText, Download, Zap, X } from "lucide-react";
-import { getAvailableTemplates, getDefaultTemplate, setDefaultTemplate } from "@/app/utils/templates";
+import { getAvailableTemplates, getDefaultTemplate, setDefaultTemplate } from "@/app/utils/templates/registry";
 import Image from "next/image";
 
 const TemplateSelector = ({

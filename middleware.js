@@ -9,7 +9,11 @@ const isProtectedRoute = createRouteMatcher([
   '/api/clients(.*)',
   '/api/items(.*)',
   '/api/invoices(.*)',
-  '/api/company-profile(.*)'
+  '/api/company-profile(.*)',
+  '/api/createInvoice(.*)',
+  '/api/generateInvoiceNumber(.*)',
+  '/api/upload-logo(.*)',
+  '/api/proxy-image(.*)'
 ])
 
 export default clerkMiddleware(async (auth, req) => {

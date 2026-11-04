@@ -1,5 +1,11 @@
 import React from "react";
 import {
+  flattenInvoiceItems,
+  calculateItemsSubtotal,
+  subItemPdfStyles as subStyles,
+  SUB_ITEM_BULLET,
+} from "../invoiceItems";
+import {
   Document,
   Page,
   Text,
@@ -404,7 +410,7 @@ const GreenClassicTemplate = ({ invoiceData }) => {
   } = invoiceData;
 
   // Calculate totals
-  const subtotal = items.reduce((sum, item) => sum + (item.amount || 0), 0);
+  const subtotal = calculateItemsSubtotal(items);
   const taxAmount = (subtotal * (taxRate || 0)) / 100;
   const discountAmount = (subtotal * (discountRate || 0)) / 100;
   const total = subtotal + taxAmount - discountAmount;
@@ -562,12 +568,18 @@ const GreenClassicTemplate = ({ invoiceData }) => {
           </View>
 
           {/* Table Rows */}
-          {items.map((item, index) => (
+          {flattenInvoiceItems(items).map((item, index) => {
+            const isSub = item.rowType === "sub";
+            const isGroup = item.rowType === "group";
+            const subCell = isSub ? subStyles.subCell : null;
+            return (
             <View
-              key={index}
+              key={item.key}
+              wrap={false}
               style={[
                 styles.tableRow,
                 index % 2 === 1 ? styles.tableRowAlt : {},
+                isSub ? subStyles.subRow : {},
               ]}
             >
               <Text
@@ -576,12 +588,15 @@ const GreenClassicTemplate = ({ invoiceData }) => {
                   includeDescription
                     ? styles.itemNameCell
                     : styles.itemNameCellWide,
+                  isGroup ? subStyles.groupName : {},
+                  isSub ? subStyles.subName : {},
                 ]}
               >
+                {isSub ? SUB_ITEM_BULLET : ""}
                 {item.itemName || "Item Name"}
               </Text>
               {includeDescription && (
-                <Text style={[styles.tableCell, styles.descriptionCell]}>
+                <Text style={[styles.tableCell, styles.descriptionCell, subCell || {}]}>
                   {item.description || ""}
                 </Text>
               )}
@@ -589,28 +604,33 @@ const GreenClassicTemplate = ({ invoiceData }) => {
                 style={[
                   styles.tableCell,
                   includeDescription ? styles.qtyCell : styles.qtyCellWide,
+                  subCell || {},
                 ]}
               >
-                {item.quantity || 1}
+                {isGroup ? "" : item.quantity || 1}
               </Text>
               <Text
                 style={[
                   styles.tableCell,
                   includeDescription ? styles.priceCell : styles.priceCellWide,
+                  subCell || {},
                 ]}
               >
-                {formatCurrency(item.rate)}
+                {isGroup ? "" : formatCurrency(item.rate)}
               </Text>
               <Text
                 style={[
                   styles.tableCell,
                   includeDescription ? styles.totalCell : styles.totalCellWide,
+                  subCell || {},
+                  isGroup ? subStyles.groupName : {},
                 ]}
               >
                 {formatCurrency(item.amount)}
               </Text>
             </View>
-          ))}
+            );
+          })}
         </View>
 
         {/* Totals Section */}

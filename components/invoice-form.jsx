@@ -30,12 +30,26 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import { Trash2, Plus, Package, Check, ArrowLeft } from "lucide-react";
-import { pdf } from "@react-pdf/renderer";
-import InvoicePDF from "@/app/utils/invoiceTemplate";
+import {
+  Trash2,
+  Plus,
+  Package,
+  Check,
+  ArrowLeft,
+  CornerDownRight,
+} from "lucide-react";
 import { useItems } from "@/contexts/ItemContext";
-import { getTemplateComponent, getDefaultTemplate } from "@/app/utils/templates";
+import { getDefaultTemplate } from "@/app/utils/templates/registry";
+import { renderInvoicePdfBlob, preloadPdfRenderer } from "@/app/utils/pdfRenderer";
 import { prepareInvoiceDataForPDF } from "@/app/utils/imageToBase64";
+import {
+  getSubItems,
+  hasSubItems,
+  calculateItemAmount,
+  calculateLineAmount,
+  calculateItemsSubtotal,
+  prepareItemsForPDF,
+} from "@/app/utils/invoiceItems";
 import TemplateSelector from "@/components/template-selector";
 import axios from "axios";
 
@@ -130,6 +144,12 @@ export default function InvoiceForm({
   }, [invoice]);
 
   const [errors, setErrors] = useState({});
+
+  // Download the PDF code in the background so Preview/Download are instant
+  useEffect(() => {
+    preloadPdfRenderer();
+  }, []);
+
   const [isLoadingAutoData, setIsLoadingAutoData] = useState(false);
   const [isLoadingCompanyProfile, setIsLoadingCompanyProfile] = useState(false);
   const [showStatusOnPDF, setShowStatusOnPDF] = useState(false);
@@ -285,16 +305,29 @@ export default function InvoiceForm({
     if (formData.items.length === 0) {
       newErrors.items = "At least one item is required";
     } else {
+      const validateLine = (line, prefix) => {
+        if (!(line.itemName || "").trim()) {
+          newErrors[`${prefix}_itemName`] = "Item name is required";
+        }
+        if (!line.quantity || line.quantity <= 0) {
+          newErrors[`${prefix}_quantity`] = "Quantity must be greater than 0";
+        }
+        if (!line.rate || line.rate <= 0) {
+          newErrors[`${prefix}_rate`] = "Rate must be greater than 0";
+        }
+      };
+
       formData.items.forEach((item, index) => {
-        if (!item.itemName.trim()) {
-          newErrors[`item_${index}_itemName`] = "Item name is required";
-        }
-        if (!item.quantity || item.quantity <= 0) {
-          newErrors[`item_${index}_quantity`] =
-            "Quantity must be greater than 0";
-        }
-        if (!item.rate || item.rate <= 0) {
-          newErrors[`item_${index}_rate`] = "Rate must be greater than 0";
+        if (hasSubItems(item)) {
+          // Group item: only the name is required; its price comes from sub-items
+          if (!(item.itemName || "").trim()) {
+            newErrors[`item_${index}_itemName`] = "Item name is required";
+          }
+          getSubItems(item).forEach((sub, subIndex) =>
+            validateLine(sub, `item_${index}_sub_${subIndex}`)
+          );
+        } else {
+          validateLine(item, `item_${index}`);
         }
       });
     }
@@ -372,6 +405,72 @@ export default function InvoiceForm({
     if (errors[errorKey]) {
       setErrors((prev) => ({ ...prev, [errorKey]: "" }));
     }
+  };
+
+  const clearErrors = (keys) => {
+    if (keys.some((key) => errors[key])) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        keys.forEach((key) => delete next[key]);
+        return next;
+      });
+    }
+  };
+
+  const addSubItem = (index) => {
+    setFormData((prev) => {
+      const newItems = [...prev.items];
+      const item = newItems[index];
+      const existing = getSubItems(item);
+      newItems[index] = {
+        ...item,
+        subItems: [
+          ...existing,
+          // The first sub-item inherits the parent's price so nothing is lost
+          existing.length === 0 && item.rate > 0
+            ? {
+                itemName: "",
+                description: "",
+                quantity: item.quantity || 1,
+                rate: item.rate,
+              }
+            : { itemName: "", description: "", quantity: 1, rate: 0 },
+        ],
+      };
+      return { ...prev, items: newItems };
+    });
+    clearErrors([`item_${index}_quantity`, `item_${index}_rate`]);
+  };
+
+  const handleSubItemChange = (index, subIndex, field, value) => {
+    setFormData((prev) => {
+      const newItems = [...prev.items];
+      const subItems = [...getSubItems(newItems[index])];
+      subItems[subIndex] = { ...subItems[subIndex], [field]: value };
+      newItems[index] = { ...newItems[index], subItems };
+      return { ...prev, items: newItems };
+    });
+    clearErrors([`item_${index}_sub_${subIndex}_${field}`]);
+  };
+
+  const removeSubItem = (index, subIndex) => {
+    setFormData((prev) => {
+      const newItems = [...prev.items];
+      const subItems = getSubItems(newItems[index]).filter(
+        (_, i) => i !== subIndex
+      );
+      const { subItems: _old, ...rest } = newItems[index];
+      newItems[index] = subItems.length > 0 ? { ...rest, subItems } : rest;
+      return { ...prev, items: newItems };
+    });
+    // Sub-item indexes shift, so drop all sub-item errors for this item
+    setErrors((prev) => {
+      const next = { ...prev };
+      Object.keys(next)
+        .filter((key) => key.startsWith(`item_${index}_sub_`))
+        .forEach((key) => delete next[key]);
+      return next;
+    });
   };
 
   const addItem = () => {
@@ -453,9 +552,7 @@ export default function InvoiceForm({
   };
 
   const calculateTotal = () => {
-    return formData.items.reduce((total, item) => {
-      return total + item.quantity * item.rate;
-    }, 0);
+    return calculateItemsSubtotal(formData.items);
   };
 
   const generateInvoiceData = () => {
@@ -472,13 +569,7 @@ export default function InvoiceForm({
       dueDate: formData.dueDate,
       status: formData.status,
       showStatusOnPDF: showStatusOnPDF,
-      items: formData.items.map((item) => ({
-        itemName: item.itemName,
-        description: item.description,
-        quantity: item.quantity,
-        rate: item.rate,
-        amount: item.quantity * item.rate,
-      })),
+      items: prepareItemsForPDF(formData.items),
       includeDescription: formData.includeDescription,
       taxRate: formData.taxRate,
       discountRate: formData.discountRate,
@@ -501,10 +592,10 @@ export default function InvoiceForm({
       console.log('🚀 About to prepare PDF data with logo:', invoiceData.companyLogo);
       const preparedInvoiceData = await prepareInvoiceDataForPDF(invoiceData);
       console.log('🚀 PDF data prepared, logo is now:', preparedInvoiceData.companyLogo?.substring(0, 50) + '...');
-      const TemplateComponent = getTemplateComponent(formData.selectedTemplate);
-      const blob = await pdf(
-        <TemplateComponent invoiceData={preparedInvoiceData} />
-      ).toBlob();
+      const blob = await renderInvoicePdfBlob(
+        formData.selectedTemplate,
+        preparedInvoiceData
+      );
       const url = URL.createObjectURL(blob);
       const newWindow = window.open(url, "_blank");
 
@@ -539,10 +630,10 @@ export default function InvoiceForm({
       console.log('🚀 About to prepare PDF data with logo:', invoiceData.companyLogo);
       const preparedInvoiceData = await prepareInvoiceDataForPDF(invoiceData);
       console.log('🚀 PDF data prepared, logo is now:', preparedInvoiceData.companyLogo?.substring(0, 50) + '...');
-      const TemplateComponent = getTemplateComponent(formData.selectedTemplate);
-      const blob = await pdf(
-        <TemplateComponent invoiceData={preparedInvoiceData} />
-      ).toBlob();
+      const blob = await renderInvoicePdfBlob(
+        formData.selectedTemplate,
+        preparedInvoiceData
+      );
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -583,10 +674,10 @@ export default function InvoiceForm({
       const invoiceData = generateInvoiceData();
       // Convert company logo URL to base64 for PDF generation
       const preparedInvoiceData = await prepareInvoiceDataForPDF(invoiceData);
-      const TemplateComponent = getTemplateComponent(formData.selectedTemplate);
-      const blob = await pdf(
-        <TemplateComponent invoiceData={preparedInvoiceData} />
-      ).toBlob();
+      const blob = await renderInvoicePdfBlob(
+        formData.selectedTemplate,
+        preparedInvoiceData
+      );
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -1155,152 +1246,313 @@ export default function InvoiceForm({
               )}
 
               <div className="space-y-3">
-                {formData.items.map((item, index) => (
-                  <div
-                    key={index}
-                    className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end"
-                  >
+                {formData.items.map((item, index) => {
+                  const subItems = getSubItems(item);
+                  const isGroup = subItems.length > 0;
+                  const nameSpan = formData.includeDescription
+                    ? "md:col-span-3"
+                    : "md:col-span-5";
+                  const fieldError = (key) =>
+                    errors[key] ? (
+                      <p className="text-red-500 dark:text-red-400 text-sm mt-1">
+                        {errors[key]}
+                      </p>
+                    ) : null;
+
+                  return (
                     <div
+                      key={index}
                       className={
-                        formData.includeDescription
-                          ? "md:col-span-3"
-                          : "md:col-span-5"
+                        isGroup
+                          ? "rounded-lg border border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20 p-3 space-y-3"
+                          : "space-y-2"
                       }
                     >
-                      <Label htmlFor={`itemName-${index}`}>Item Name</Label>
-                      <Input
-                        id={`itemName-${index}`}
-                        value={item.itemName}
-                        onChange={(e) =>
-                          handleItemChange(index, "itemName", e.target.value)
-                        }
-                        placeholder="Item name"
-                        className={
-                          errors[`item_${index}_itemName`]
-                            ? "border-red-500"
-                            : ""
-                        }
-                      />
-                      {errors[`item_${index}_itemName`] && (
-                        <p className="text-red-500 text-sm mt-1">
-                          {errors[`item_${index}_itemName`]}
-                        </p>
-                      )}
-                    </div>
+                      {/* Main item row */}
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                        <div className={nameSpan}>
+                          <Label htmlFor={`itemName-${index}`}>
+                            {isGroup ? "Item Group" : "Item Name"}
+                          </Label>
+                          <Input
+                            id={`itemName-${index}`}
+                            value={item.itemName}
+                            onChange={(e) =>
+                              handleItemChange(index, "itemName", e.target.value)
+                            }
+                            placeholder={
+                              isGroup ? "e.g. Website Changes" : "Item name"
+                            }
+                            className={`${isGroup ? "font-semibold" : ""} ${
+                              errors[`item_${index}_itemName`]
+                                ? "border-red-500"
+                                : ""
+                            }`}
+                          />
+                          {fieldError(`item_${index}_itemName`)}
+                        </div>
 
-                    {formData.includeDescription && (
-                      <div className="md:col-span-2">
-                        <Label htmlFor={`description-${index}`}>
-                          Description
-                        </Label>
-                        <Input
-                          id={`description-${index}`}
-                          value={item.description}
-                          onChange={(e) =>
-                            handleItemChange(
-                              index,
-                              "description",
-                              e.target.value
-                            )
-                          }
-                          placeholder="Item description"
-                          className={
-                            errors[`item_${index}_description`]
-                              ? "border-red-500"
-                              : ""
-                          }
-                        />
-                        {errors[`item_${index}_description`] && (
-                          <p className="text-red-500 text-sm mt-1">
-                            {errors[`item_${index}_description`]}
-                          </p>
+                        {formData.includeDescription && (
+                          <div className="md:col-span-2">
+                            <Label htmlFor={`description-${index}`}>
+                              Description
+                            </Label>
+                            <Input
+                              id={`description-${index}`}
+                              value={item.description}
+                              onChange={(e) =>
+                                handleItemChange(
+                                  index,
+                                  "description",
+                                  e.target.value
+                                )
+                              }
+                              placeholder="Item description"
+                            />
+                          </div>
                         )}
+
+                        {isGroup ? (
+                          <div className="md:col-span-4 h-10 flex items-center text-sm text-gray-500 dark:text-gray-400">
+                            Total of {subItems.length} sub-item
+                            {subItems.length === 1 ? "" : "s"}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="md:col-span-2">
+                              <Label htmlFor={`quantity-${index}`}>Quantity</Label>
+                              <Input
+                                id={`quantity-${index}`}
+                                type="number"
+                                min="1"
+                                value={item.quantity}
+                                onFocus={(e) => {
+                                  if (e.target.value === "0") {
+                                    e.target.value = "";
+                                  }
+                                }}
+                                onChange={(e) =>
+                                  handleItemChange(
+                                    index,
+                                    "quantity",
+                                    parseInt(e.target.value) || 0
+                                  )
+                                }
+                                className={
+                                  errors[`item_${index}_quantity`]
+                                    ? "border-red-500"
+                                    : ""
+                                }
+                              />
+                              {fieldError(`item_${index}_quantity`)}
+                            </div>
+
+                            <div className="md:col-span-2">
+                              <Label htmlFor={`rate-${index}`}>Rate ($)</Label>
+                              <Input
+                                id={`rate-${index}`}
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={item.rate}
+                                onFocus={(e) => {
+                                  if (e.target.value === "0") {
+                                    e.target.value = "";
+                                  }
+                                }}
+                                onChange={(e) =>
+                                  handleItemChange(
+                                    index,
+                                    "rate",
+                                    parseFloat(e.target.value) || 0
+                                  )
+                                }
+                                className={
+                                  errors[`item_${index}_rate`]
+                                    ? "border-red-500"
+                                    : ""
+                                }
+                              />
+                              {fieldError(`item_${index}_rate`)}
+                            </div>
+                          </>
+                        )}
+
+                        <div className="md:col-span-2">
+                          <Label>Amount</Label>
+                          <div
+                            className={`h-10 flex items-center px-3 border rounded-md ${
+                              isGroup
+                                ? "bg-blue-100 dark:bg-blue-900/40 font-semibold"
+                                : "bg-gray-50 dark:bg-gray-800"
+                            }`}
+                          >
+                            ${calculateItemAmount(item).toFixed(2)}
+                          </div>
+                        </div>
+
+                        <div className="md:col-span-1">
+                          <Button
+                            type="button"
+                            onClick={() => removeItem(index)}
+                            variant="outline"
+                            size="sm"
+                            disabled={formData.items.length === 1}
+                            aria-label="Remove item"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
                       </div>
-                    )}
 
-                    <div className="md:col-span-2">
-                      <Label htmlFor={`quantity-${index}`}>Quantity</Label>
-                      <Input
-                        id={`quantity-${index}`}
-                        type="number"
-                        min="1"
-                        value={item.quantity}
-                        onFocus={(e) => {
-                          if (e.target.value === "0") {
-                            e.target.value = "";
-                          }
-                        }}
-                        onChange={(e) =>
-                          handleItemChange(
-                            index,
-                            "quantity",
-                            parseInt(e.target.value) || 0
-                          )
-                        }
-                        className={
-                          errors[`item_${index}_quantity`]
-                            ? "border-red-500"
-                            : ""
-                        }
-                      />
-                      {errors[`item_${index}_quantity`] && (
-                        <p className="text-red-500 dark:text-red-400 text-sm mt-1">
-                          {errors[`item_${index}_quantity`]}
-                        </p>
+                      {/* Sub-item rows */}
+                      {isGroup && (
+                        <div className="ml-2 md:ml-4 pl-3 md:pl-4 border-l-2 border-blue-300 dark:border-blue-700 space-y-2">
+                          {subItems.map((sub, subIndex) => {
+                            const prefix = `item_${index}_sub_${subIndex}`;
+                            return (
+                              <div
+                                key={subIndex}
+                                className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start"
+                              >
+                                <div className={`${nameSpan} flex items-start gap-2`}>
+                                  <CornerDownRight className="w-4 h-4 mt-3 shrink-0 text-blue-400" />
+                                  <div className="flex-1">
+                                    <Input
+                                      aria-label="Sub-item name"
+                                      value={sub.itemName}
+                                      onChange={(e) =>
+                                        handleSubItemChange(
+                                          index,
+                                          subIndex,
+                                          "itemName",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="e.g. Home page changes"
+                                      className={
+                                        errors[`${prefix}_itemName`]
+                                          ? "border-red-500"
+                                          : ""
+                                      }
+                                    />
+                                    {fieldError(`${prefix}_itemName`)}
+                                  </div>
+                                </div>
+
+                                {formData.includeDescription && (
+                                  <div className="md:col-span-2">
+                                    <Input
+                                      aria-label="Sub-item description"
+                                      value={sub.description}
+                                      onChange={(e) =>
+                                        handleSubItemChange(
+                                          index,
+                                          subIndex,
+                                          "description",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder="Description"
+                                    />
+                                  </div>
+                                )}
+
+                                <div className="md:col-span-2">
+                                  <Input
+                                    aria-label="Sub-item quantity"
+                                    type="number"
+                                    min="1"
+                                    value={sub.quantity}
+                                    onFocus={(e) => {
+                                      if (e.target.value === "0") {
+                                        e.target.value = "";
+                                      }
+                                    }}
+                                    onChange={(e) =>
+                                      handleSubItemChange(
+                                        index,
+                                        subIndex,
+                                        "quantity",
+                                        parseInt(e.target.value) || 0
+                                      )
+                                    }
+                                    placeholder="Qty"
+                                    className={
+                                      errors[`${prefix}_quantity`]
+                                        ? "border-red-500"
+                                        : ""
+                                    }
+                                  />
+                                  {fieldError(`${prefix}_quantity`)}
+                                </div>
+
+                                <div className="md:col-span-2">
+                                  <Input
+                                    aria-label="Sub-item rate"
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={sub.rate}
+                                    onFocus={(e) => {
+                                      if (e.target.value === "0") {
+                                        e.target.value = "";
+                                      }
+                                    }}
+                                    onChange={(e) =>
+                                      handleSubItemChange(
+                                        index,
+                                        subIndex,
+                                        "rate",
+                                        parseFloat(e.target.value) || 0
+                                      )
+                                    }
+                                    placeholder="Rate"
+                                    className={
+                                      errors[`${prefix}_rate`]
+                                        ? "border-red-500"
+                                        : ""
+                                    }
+                                  />
+                                  {fieldError(`${prefix}_rate`)}
+                                </div>
+
+                                <div className="md:col-span-2">
+                                  <div className="h-10 flex items-center px-3 border rounded-md bg-white dark:bg-gray-800 text-sm text-gray-600 dark:text-gray-300">
+                                    ${calculateLineAmount(sub).toFixed(2)}
+                                  </div>
+                                </div>
+
+                                <div className="md:col-span-1">
+                                  <Button
+                                    type="button"
+                                    onClick={() => removeSubItem(index, subIndex)}
+                                    variant="ghost"
+                                    size="sm"
+                                    aria-label="Remove sub-item"
+                                  >
+                                    <Trash2 className="w-4 h-4 text-gray-500" />
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
-                    </div>
 
-                    <div className="md:col-span-2">
-                      <Label htmlFor={`rate-${index}`}>Rate ($)</Label>
-                      <Input
-                        id={`rate-${index}`}
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={item.rate}
-                        onFocus={(e) => {
-                          if (e.target.value === "0") {
-                            e.target.value = "";
-                          }
-                        }}
-                        onChange={(e) =>
-                          handleItemChange(
-                            index,
-                            "rate",
-                            parseFloat(e.target.value) || 0
-                          )
-                        }
-                        className={
-                          errors[`item_${index}_rate`] ? "border-red-500" : ""
-                        }
-                      />
-                      {errors[`item_${index}_rate`] && (
-                        <p className="text-red-500 text-sm mt-1">
-                          {errors[`item_${index}_rate`]}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="md:col-span-2">
-                      <Label>Amount</Label>
-                      <div className="h-10 flex items-center px-3 border rounded-md bg-gray-50">
-                        ${(item.quantity * item.rate).toFixed(2)}
-                      </div>
-                    </div>
-
-                    <div className="md:col-span-1">
                       <Button
                         type="button"
-                        onClick={() => removeItem(index)}
-                        variant="outline"
+                        variant="ghost"
                         size="sm"
-                        disabled={formData.items.length === 1}
+                        onClick={() => addSubItem(index)}
+                        className="text-blue-600 hover:text-blue-700 dark:text-blue-400 h-8 px-2"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Plus className="w-3.5 h-3.5 mr-1" />
+                        Add sub-item
                       </Button>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="text-right">

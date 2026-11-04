@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { useUser } from '@clerk/nextjs';
 
@@ -23,6 +23,17 @@ export function InvoiceProvider({ children }) {
   const [error, setError] = useState({});
   const [lastFetch, setLastFetch] = useState({});
   const [pagination, setPagination] = useState({});
+
+  // Refs mirror state so callbacks can read the latest values synchronously.
+  // (Reading state through setState updaters is unreliable in React 18+.)
+  const userId = user?.id;
+  const lastFetchRef = useRef({});
+  const paginationRef = useRef({});
+  const invoicesRef = useRef({});
+  const loadingMoreRef = useRef({});
+  useEffect(() => { lastFetchRef.current = lastFetch; }, [lastFetch]);
+  useEffect(() => { paginationRef.current = pagination; }, [pagination]);
+  useEffect(() => { invoicesRef.current = invoicesByClient; }, [invoicesByClient]);
 
   // Cache duration: 2 minutes for invoices (shorter than clients as they change more frequently)
   const CACHE_DURATION = 2 * 60 * 1000;
@@ -70,11 +81,7 @@ export function InvoiceProvider({ children }) {
     const hasSearchParams = Object.keys(searchParams).some(key => searchParams[key]);
 
     // Check if we have fresh data and don't need to force refresh
-    let lastFetchTime = null;
-    setLastFetch(prev => {
-      lastFetchTime = prev[clientId];
-      return prev;
-    });
+    const lastFetchTime = lastFetchRef.current[clientId];
     
     if (!force && !reset && !hasSearchParams && lastFetchTime && Date.now() - lastFetchTime < CACHE_DURATION) {
       return;
@@ -82,22 +89,13 @@ export function InvoiceProvider({ children }) {
 
     try {
       // Use functional state updates to avoid dependency issues
-      let isInitialLoad = false;
-      let currentPagination = { page: 1, limit: 10 };
-      
-      // Get current state values
-      setInvoicesByClient(prev => {
-        isInitialLoad = reset || !prev[clientId] || prev[clientId].length === 0;
-        return prev;
-      });
-      
-      setPagination(prev => {
-        currentPagination = prev[clientId] || { page: 1, limit: 10 };
-        if (isInitialLoad) {
-          return { ...prev, [clientId]: { page: 1, limit: 10, totalCount: 0, totalPages: 0, hasMore: false } };
-        }
-        return prev;
-      });
+      const existing = invoicesRef.current[clientId];
+      const isInitialLoad = reset || !existing || existing.length === 0;
+      const currentPagination = paginationRef.current[clientId] || { page: 1, limit: 10 };
+
+      if (isInitialLoad) {
+        setPagination(prev => ({ ...prev, [clientId]: { page: 1, limit: 10, totalCount: 0, totalPages: 0, hasMore: false } }));
+      }
       
       // Use different loading states for search vs initial load
       if (hasSearchParams) {
@@ -156,6 +154,7 @@ export function InvoiceProvider({ children }) {
         }
       }));
       
+      lastFetchRef.current = { ...lastFetchRef.current, [clientId]: Date.now() };
       setLastFetch(prev => ({
         ...prev,
         [clientId]: Date.now()
@@ -174,26 +173,14 @@ export function InvoiceProvider({ children }) {
       setLoading(prev => ({ ...prev, [clientId]: false }));
       setSearchLoading(prev => ({ ...prev, [clientId]: false }));
     }
-  }, [isLoaded, user, CACHE_DURATION]);
+  }, [isLoaded, userId, CACHE_DURATION]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMoreInvoices = useCallback(async (clientId) => {
-    let clientPagination = null;
-    let isCurrentlyLoading = false;
-    
-    // Get current state values using functional updates
-    setPagination(prev => {
-      clientPagination = prev[clientId];
-      return prev;
-    });
-    
-    setLoadingMore(prev => {
-      isCurrentlyLoading = prev[clientId];
-      return prev;
-    });
-    
-    if (!clientPagination?.hasMore || isCurrentlyLoading) return;
+    const clientPagination = paginationRef.current[clientId];
+    if (!clientPagination?.hasMore || loadingMoreRef.current[clientId]) return;
 
     try {
+      loadingMoreRef.current = { ...loadingMoreRef.current, [clientId]: true };
       setLoadingMore(prev => ({ ...prev, [clientId]: true }));
       setError(prev => ({ ...prev, [clientId]: null }));
       
@@ -230,6 +217,7 @@ export function InvoiceProvider({ children }) {
         [clientId]: 'Failed to load more invoices'
       }));
     } finally {
+      loadingMoreRef.current = { ...loadingMoreRef.current, [clientId]: false };
       setLoadingMore(prev => ({ ...prev, [clientId]: false }));
     }
   }, []);
