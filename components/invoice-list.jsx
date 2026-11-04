@@ -1,5 +1,6 @@
 "use client";
 
+import { useToast } from "@/contexts/ToastContext";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import LoadingButton from "@/components/ui/loading-button";
@@ -33,13 +34,30 @@ import {
   Download,
   Edit,
   Trash2,
-  Calendar,
-  DollarSign,
   Search,
   X,
-  CheckCircle,
   Copy,
+  MoreHorizontal,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Skeleton } from "@/components/ui/skeleton";
 import { DEFAULT_TEMPLATE, getTemplateById } from "@/app/utils/templates/registry";
 import { renderInvoicePdfBlob } from "@/app/utils/pdfRenderer";
 import { prepareInvoiceDataForPDF } from "@/app/utils/imageToBase64";
@@ -48,6 +66,7 @@ import {
   prepareItemsForPDF,
 } from "@/app/utils/invoiceItems";
 import { useInvoices } from "@/contexts/InvoiceContext";
+import { Spinner } from "@/components/ui/spinner";
 
 export default function InvoiceList({ clientId, onEditInvoice }) {
   const {
@@ -73,6 +92,8 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
   const [invoiceToDelete, setInvoiceToDelete] = useState(null);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [busyInvoiceId, setBusyInvoiceId] = useState(null);
+  const { toast } = useToast();
 
   // Get invoices from context
   const rawInvoices = getInvoicesForClient(clientId);
@@ -149,12 +170,15 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
         status: invoiceData.status || "PENDING",
         items: prepareItemsForPDF(invoiceData.items),
         includeDescription: invoiceData.includeDescription || false,
+        includeQuantity: invoiceData.includeQuantity !== false,
         taxRate: invoiceData.taxRate || 0,
         discountRate: invoiceData.discountRate || 0,
         notes: invoiceData.notes || "Thank you for your business!",
         terms: invoiceData.terms || "",
         bankName: invoiceData.bankName || "",
         bankAccount: invoiceData.bankAccount || "",
+        paymentLink: invoiceData.paymentLink || "",
+        paymentLinkText: invoiceData.paymentLinkText || "",
       };
 
       // Convert company logo URL to base64 for PDF generation
@@ -177,7 +201,7 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
       console.log("PDF downloaded successfully");
     } catch (error) {
       console.error("Error downloading PDF:", error);
-      alert("Error generating PDF. Please try again.");
+      toast.error("Couldn't generate the PDF. Please try again.");
     }
   };
 
@@ -187,14 +211,18 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
   };
 
   const confirmDelete = async () => {
-    if (invoiceToDelete) {
+    if (invoiceToDelete && !isDeleting) {
+      setIsDeleting(true);
       try {
         await deleteInvoice(invoiceToDelete, clientId);
         setDeleteDialogOpen(false);
         setInvoiceToDelete(null);
+        toast.success("Invoice deleted");
       } catch (error) {
         console.error("Error deleting invoice:", error);
-        alert("Error deleting invoice. Please try again.");
+        toast.error("Couldn't delete the invoice. Please try again.");
+      } finally {
+        setIsDeleting(false);
       }
     }
   };
@@ -206,8 +234,10 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
       setIsDeleting(true);
       await deleteAllInvoices(clientId);
       setDeleteAllDialogOpen(false);
+      toast.success("All invoices deleted");
     } catch (error) {
       console.error("Error deleting all invoices:", error);
+      toast.error("Couldn't delete the invoices. Please try again.");
     } finally {
       setIsDeleting(false);
     }
@@ -216,9 +246,10 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
   const handleDuplicateInvoice = async (invoiceId) => {
     try {
       await duplicateInvoice(invoiceId, clientId);
+      toast.success("Invoice duplicated");
     } catch (error) {
       console.error("Error duplicating invoice:", error);
-      alert("Error duplicating invoice. Please try again.");
+      toast.error("Couldn't duplicate the invoice. Please try again.");
     }
   };
 
@@ -230,10 +261,10 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
   const handleStatusChange = async (invoiceId, newStatus) => {
     try {
       await updateInvoiceStatus(invoiceId, newStatus, clientId);
-      console.log(`Invoice status updated to ${newStatus}`);
+      toast.success(`Marked as ${newStatus.charAt(0) + newStatus.slice(1).toLowerCase()}`);
     } catch (error) {
       console.error("Error updating invoice status:", error);
-      alert("Error updating invoice status. Please try again.");
+      toast.error("Couldn't update the status. Please try again.");
     }
   };
 
@@ -245,7 +276,12 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
   };
 
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
+    if (!dateString) return "";
+    // Read plain YYYY-MM-DD dates as local dates (not UTC) so the day doesn't shift
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
+    const date = match ? new Date(+match[1], +match[2] - 1, +match[3]) : new Date(dateString);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -271,23 +307,22 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
     const getStatusColor = (status) => {
       switch (status) {
         case "PAID":
-          return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+          return "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
         case "DRAFT":
-          return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
+          return "border-border bg-muted text-muted-foreground";
         case "SENT":
-          return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
-        case "VIEWED":
-          return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
-        case "PENDING":
-          return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
-        case "OVERDUE":
-          return "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200";
-        case "CANCELLED":
-          return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
         case "AVAILABLE":
-          return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+          return "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-400";
+        case "VIEWED":
+          return "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-400";
+        case "PENDING":
+          return "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400";
+        case "OVERDUE":
+          return "border-orange-500/25 bg-orange-500/10 text-orange-700 dark:text-orange-400";
+        case "CANCELLED":
+          return "border-destructive/25 bg-destructive/10 text-destructive";
         default:
-          return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
+          return "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400";
       }
     };
 
@@ -296,7 +331,7 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
     };
 
     return (
-      <Badge className={getStatusColor(status)}>
+      <Badge variant="outline" className={getStatusColor(status)}>
         {formatStatusText(status)}
       </Badge>
     );
@@ -309,45 +344,35 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
     return template.name || "Unknown Template";
   };
 
-  if (isLoading) {
-    return (
-      <Card className="dark:bg-gray-800 dark:border-gray-700">
-        <CardHeader>
-          <CardTitle className="dark:text-white">Invoices</CardTitle>
-          <CardDescription className="dark:text-gray-300">
-            Loading invoices...
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="animate-pulse space-y-4">
-            {[...Array(3)].map((_, i) => (
-              <div
-                key={i}
-                className="h-20 bg-gray-200 dark:bg-gray-700 rounded"
-              ></div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  const hasFilters = Boolean(searchTerm || searchDate || searchStatus);
+  // Use the loaded list when everything is loaded (stays right after local adds/deletes)
+  const totalInvoices = clientPagination.hasMore
+    ? clientPagination.totalCount ?? invoices.length
+    : invoices.length;
+  const STATUS_OPTIONS = [
+    { value: "PENDING", label: "Pending" },
+    { value: "PAID", label: "Paid" },
+    { value: "OVERDUE", label: "Overdue" },
+    { value: "CANCELLED", label: "Cancelled" },
+  ];
+
+  // Runs a row action while showing a spinner on that row's menu button
+  const runRowAction = async (invoiceId, action) => {
+    setBusyInvoiceId(invoiceId);
+    try {
+      await action();
+    } finally {
+      setBusyInvoiceId(null);
+    }
+  };
 
   if (fetchError) {
     return (
-      <Card className="dark:bg-gray-800 dark:border-gray-700">
-        <CardHeader>
-          <CardTitle className="dark:text-white">Invoices</CardTitle>
-          <CardDescription className="dark:text-gray-300">
-            Error loading invoices
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-red-500 dark:text-red-400">{fetchError}</p>
-          <Button
-            onClick={() => fetchInvoices(clientId, true)}
-            className="mt-4"
-          >
-            Retry
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+          <p className="text-sm text-destructive">Couldn&apos;t load invoices.</p>
+          <Button variant="outline" size="sm" onClick={() => fetchInvoices(clientId, true)}>
+            Try again
           </Button>
         </CardContent>
       </Card>
@@ -356,358 +381,288 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
 
   return (
     <>
-      <Card className="dark:bg-gray-800 dark:border-gray-700">
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2 dark:text-white">
-            <FileText className="h-5 w-5" />
-            <span>Invoices</span>
-          </CardTitle>
-          <CardDescription className="dark:text-gray-300">
-            {invoices.length === 0
-              ? "No invoices created yet for this client."
-              : `${invoices.length} invoice(s) for this client.`}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {/* Search Section */}
-          {invoices.length > 0 && (
-            <div className="mb-6 space-y-4">
-              <div className="flex items-center space-x-2">
-                <Search className="h-4 w-4 text-gray-400 dark:text-gray-500" />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Search Invoices
-                </span>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="relative">
-                  <Input
-                    type="text"
-                    placeholder="Search by invoice number..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pr-8"
-                  />
-                  {searchTerm && (
-                    <button
-                      onClick={() => setSearchTerm("")}
-                      className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-                <div className="relative">
-                  <Input
-                    type="date"
-                    placeholder="Filter by issue date..."
-                    value={searchDate}
-                    onChange={(e) => setSearchDate(e.target.value)}
-                    className="pr-8"
-                  />
-                  {searchDate && (
-                    <button
-                      onClick={() => setSearchDate("")}
-                      className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-                <div className="relative">
-                  <Select value={searchStatus} onValueChange={setSearchStatus}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Filter by status..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="PAID">Paid</SelectItem>
-                      <SelectItem value="PENDING">Pending</SelectItem>
-                      <SelectItem value="CANCELLED">Cancelled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {searchStatus && (
-                    <button
-                      onClick={() => setSearchStatus("")}
-                      className="absolute right-8 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 z-10"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-                <div className="flex space-x-2">
-                  {(searchTerm || searchDate || searchStatus) && (
-                    <Button
-                      variant="outline"
-                      onClick={clearSearch}
-                      className="flex items-center space-x-2"
-                    >
-                      <X className="h-4 w-4" />
-                      <span>Clear All</span>
-                    </Button>
-                  )}
-                  {invoices.length > 0 && (
-                    <Button
-                      variant="destructive"
-                      onClick={() => setDeleteAllDialogOpen(true)}
-                      className="flex items-center space-x-2"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      <span>Delete All</span>
-                    </Button>
-                  )}
-                </div>
-              </div>
-              {(searchTerm || searchDate || searchStatus) && (
-                <div className="text-sm text-gray-600">
-                  Showing {filteredInvoices.length} of {invoices.length}{" "}
-                  invoices
-                </div>
-              )}
+      <Card className="gap-0 py-0">
+        {/* Header + toolbar */}
+        <div className="flex flex-col gap-4 border-b p-4 md:p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="font-semibold leading-none">Invoices</h2>
+              <p className="mt-1.5 text-sm text-muted-foreground">
+                {isLoading
+                  ? "Loading invoices…"
+                  : `${totalInvoices} invoice${totalInvoices === 1 ? "" : "s"} for this client`}
+              </p>
             </div>
-          )}
+            {invoices.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() => setDeleteAllDialogOpen(true)}
+              >
+                <Trash2 /> Delete all
+              </Button>
+            )}
+          </div>
 
-          {/* Invoice List Area with Search Loading Overlay */}
-          <div className="relative">
-            {isSearchLoading && (
-              <div className="absolute inset-0 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm z-10 flex items-center justify-center rounded-lg">
-                <div className="flex items-center space-x-2 text-gray-600 dark:text-gray-300">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-                  <span className="text-sm">Searching...</span>
-                </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="relative sm:max-w-xs sm:flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder="Search invoice number"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-8"
+                aria-label="Search invoices by number"
+              />
+            </div>
+            <Input
+              type="date"
+              value={searchDate}
+              onChange={(e) => setSearchDate(e.target.value)}
+              className="sm:w-44"
+              aria-label="Filter by date"
+            />
+            <Select
+              value={searchStatus || "ALL"}
+              onValueChange={(v) => setSearchStatus(v === "ALL" ? "" : v)}
+            >
+              <SelectTrigger className="sm:w-40" aria-label="Filter by status">
+                <SelectValue placeholder="All statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All statuses</SelectItem>
+                {STATUS_OPTIONS.map((s) => (
+                  <SelectItem key={s.value} value={s.value}>
+                    {s.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {hasFilters && (
+              <Button variant="ghost" size="sm" onClick={clearSearch}>
+                <X /> Reset
+              </Button>
+            )}
+            {isSearchLoading && <Spinner className="size-4 text-muted-foreground" />}
+          </div>
+        </div>
+
+        {/* Table */}
+        {isLoading ? (
+          <div className="space-y-3 p-4 md:p-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
+        ) : invoices.length === 0 ? (
+          <div className="flex flex-col items-center px-6 py-14 text-center">
+            <div className="mb-3 flex size-10 items-center justify-center rounded-full bg-muted">
+              <FileText className="size-5 text-muted-foreground" />
+            </div>
+            <p className="font-medium">{hasFilters ? "No matching invoices" : "No invoices yet"}</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {hasFilters
+                ? "Try a different search or reset the filters."
+                : "Create the first invoice for this client with “New invoice”."}
+            </p>
+            {hasFilters && (
+              <Button variant="outline" size="sm" className="mt-4" onClick={clearSearch}>
+                Reset filters
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div ref={invoicesContainerRef} className="px-2 pb-2 md:px-4">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Invoice</TableHead>
+                  <TableHead className="hidden sm:table-cell">Issued</TableHead>
+                  <TableHead className="hidden sm:table-cell">Due</TableHead>
+                  <TableHead className="hidden lg:table-cell">Template</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="w-[88px]">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredInvoices.map((invoice) => {
+                  const data = invoice.data || {};
+                  const itemCount = Array.isArray(data.items) ? data.items.length : 0;
+                  const isBusy = busyInvoiceId === invoice.id;
+                  return (
+                    <TableRow
+                      key={invoice.id}
+                      // The whole row opens the invoice for editing
+                      onClick={() => onEditInvoice(invoice)}
+                      onKeyDown={(e) => {
+                        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                          e.preventDefault();
+                          onEditInvoice(invoice);
+                        }
+                      }}
+                      tabIndex={0}
+                      aria-label={`Edit ${data.invoiceNumber || "invoice"}`}
+                      className={`group cursor-pointer focus-visible:bg-muted/50 focus-visible:outline-none ${isBusy ? "opacity-70" : ""}`}
+                    >
+                      <TableCell>
+                        <span className="font-medium underline-offset-4 group-hover:underline">
+                          {data.invoiceNumber || "Invoice"}
+                        </span>
+                        <p className="text-xs text-muted-foreground">
+                          {itemCount} item{itemCount === 1 ? "" : "s"}
+                        </p>
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground sm:table-cell">
+                        {formatDate(data.issueDate || data.invoiceDate) || "—"}
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground sm:table-cell">
+                        {formatDate(data.dueDate) || "—"}
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground lg:table-cell">
+                        {getTemplateName(invoice)}
+                      </TableCell>
+                      <TableCell>{getStatusBadge(invoice)}</TableCell>
+                      <TableCell className="text-right font-medium tabular-nums">
+                        {formatCurrency(calculateInvoiceTotal(invoice))}
+                      </TableCell>
+                      <TableCell>
+                        {/* Keep action clicks from also opening the row */}
+                        <div
+                          className="flex items-center justify-end gap-1"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8"
+                            title="Download PDF"
+                            aria-label={`Download ${data.invoiceNumber || "invoice"} as PDF`}
+                            disabled={isBusy}
+                            onClick={() => runRowAction(invoice.id, () => handleDownloadPDF(invoice))}
+                          >
+                            <Download />
+                          </Button>
+                          <DropdownMenu modal={false}>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-8"
+                                disabled={isBusy}
+                                aria-label={`More actions for ${data.invoiceNumber || "invoice"}`}
+                              >
+                                {isBusy ? <Spinner className="size-4" /> : <MoreHorizontal />}
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent
+                              align="end"
+                              className="w-48"
+                              // Menu renders in a portal, but React still bubbles its clicks to the row
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <DropdownMenuItem onClick={() => onEditInvoice(invoice)}>
+                                <Edit className="mr-2 size-4" /> Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  runRowAction(invoice.id, () => handleDuplicateInvoice(invoice.id))
+                                }
+                              >
+                                <Copy className="mr-2 size-4" /> Duplicate
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                                Mark as
+                              </DropdownMenuLabel>
+                              <DropdownMenuRadioGroup
+                                value={data.status || "PENDING"}
+                                onValueChange={(value) =>
+                                  value !== (data.status || "PENDING") &&
+                                  runRowAction(invoice.id, () => handleStatusChange(invoice.id, value))
+                                }
+                              >
+                                {STATUS_OPTIONS.map((s) => (
+                                  <DropdownMenuRadioItem key={s.value} value={s.value}>
+                                    {s.label}
+                                  </DropdownMenuRadioItem>
+                                ))}
+                              </DropdownMenuRadioGroup>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="text-destructive focus:text-destructive"
+                                onClick={() => handleDeleteInvoice(invoice.id)}
+                              >
+                                <Trash2 className="mr-2 size-4" /> Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+
+            {clientPagination.hasMore && !hasFilters && (
+              <div className="flex justify-center py-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  loading={isLoadingMore}
+                  onClick={() => loadMoreInvoices(clientId)}
+                >
+                  {isLoadingMore ? "Loading…" : "Load more"}
+                </Button>
               </div>
             )}
-            
-            {invoices.length === 0 ? (
-              <div className="text-center py-8">
-                <FileText className="mx-auto h-12 w-12 text-gray-400" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">
-                  No invoices
-                </h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  Create your first invoice for this client.
-                </p>
-              </div>
-            ) : filteredInvoices.length === 0 ? (
-              <div className="text-center py-8">
-                <Search className="mx-auto h-12 w-12 text-gray-400" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">
-                  No invoices found
-                </h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  Try adjusting your search criteria.
-                </p>
-              </div>
-            ) : (
-            <div
-              ref={invoicesContainerRef}
-              className="space-y-4 max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent"
-              onScroll={(e) => {
-                const { scrollTop, scrollHeight, clientHeight } = e.target;
-                if (
-                  scrollHeight - scrollTop <= clientHeight + 50 &&
-                  !isLoadingMore &&
-                  clientPagination.hasMore
-                ) {
-                  loadMoreInvoices(clientId);
-                }
-              }}
-            >
-              {filteredInvoices.map((invoice) => {
-                const invoiceData = invoice.data || {};
-                return (
-                  <div
-                    key={invoice.id}
-                    className="border rounded-lg p-4 hover:shadow-md transition-shadow"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-3">
-                          <h4 className="font-semibold text-lg">
-                            #{invoiceData.invoiceNumber || "N/A"}
-                          </h4>
-                          {getStatusBadge(invoice)}
-                        </div>
-                        <div className="mt-2 space-y-2">
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm text-gray-600">
-                            <div className="flex items-center space-x-2">
-                              <Calendar className="h-4 w-4" />
-                              <span>
-                                Issue:{" "}
-                                {invoiceData.invoiceDate || invoiceData.issueDate
-                                  ? formatDate(
-                                      invoiceData.invoiceDate ||
-                                        invoiceData.issueDate
-                                    )
-                                  : "N/A"}
-                              </span>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <Calendar className="h-4 w-4" />
-                              <span>
-                                Due:{" "}
-                                {invoiceData.dueDate
-                                  ? formatDate(invoiceData.dueDate)
-                                  : "N/A"}
-                              </span>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <DollarSign className="h-4 w-4" />
-                              <span>
-                                Total:{" "}
-                                {formatCurrency(calculateInvoiceTotal(invoice))}
-                              </span>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <FileText className="h-4 w-4" />
-                              <span>Items: {invoiceData.items?.length || 0}</span>
-                            </div>
-                          </div>
-                          <div className="flex items-center space-x-2 text-sm text-gray-600">
-                            <FileText className="h-4 w-4" />
-                            <span>Template: {getTemplateName(invoice)}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <LoadingButton
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDownloadPDF(invoice)}
-                          errorMessage="Failed to download PDF. Please try again."
-                        >
-                          <Download className="h-4 w-4" />
-                        </LoadingButton>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            onEditInvoice && onEditInvoice(invoice)
-                          }
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <LoadingButton
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDuplicateInvoice(invoice.id)}
-                          errorMessage="Failed to duplicate invoice. Please try again."
-                          title="Duplicate Invoice"
-                        >
-                          <Copy className="h-4 w-4" />
-                        </LoadingButton>
-                        <Select
-                          value={invoiceData.status || "PENDING"}
-                          onValueChange={(newStatus) =>
-                            handleStatusChange(invoice.id, newStatus)
-                          }
-                        >
-                          <SelectTrigger className="w-[120px] h-8">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="PENDING">Pending</SelectItem>
-                            <SelectItem value="PAID">Paid</SelectItem>
-                            <SelectItem value="CANCELLED">Cancelled</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <LoadingButton
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDeleteInvoice(invoice.id)}
-                          className="text-red-600 hover:text-red-700 cursor-pointer"
-                          errorMessage="Failed to delete invoice. Please try again."
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </LoadingButton>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Loading more indicator */}
-              {isLoadingMore && (
-                <div className="flex items-center justify-center py-4">
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 dark:border-blue-400"></div>
-                  <span className="ml-2 text-sm text-gray-600 dark:text-gray-300">
-                    Loading more invoices...
-                  </span>
-                </div>
-              )}
-
-              {/* End of list indicator */}
-              {!clientPagination.hasMore &&
-                invoices.length > 0 &&
-                filteredInvoices.length > 0 &&
-                !isLoadingMore && (
-                  <div className="text-center py-4">
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      All invoices loaded successfully
-                    </span>
-                  </div>
-                )}
-            </div>
-          )}
           </div>
-        </CardContent>
+        )}
       </Card>
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent>
+      {/* Delete one */}
+      <Dialog open={deleteDialogOpen} onOpenChange={(open) => !isDeleting && (open ? setDeleteDialogOpen(true) : cancelDelete())}>
+        <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogTitle>Delete this invoice?</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete this invoice? This action cannot
-              be undone.
+              This permanently deletes the invoice. This can&apos;t be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={cancelDelete}
-              className="cursor-pointer hover:bg-gray-100 transition-colors duration-200"
-            >
+            <Button variant="outline" onClick={cancelDelete} disabled={isDeleting}>
               Cancel
             </Button>
-            <LoadingButton
-              variant="destructive"
-              onClick={confirmDelete}
-              className="cursor-pointer hover:bg-red-700 transition-colors duration-200"
-              errorMessage="Failed to delete invoice. Please try again."
-            >
-              Delete
-            </LoadingButton>
+            <Button variant="destructive" onClick={confirmDelete} loading={isDeleting}>
+              {isDeleting ? "Deleting…" : "Delete"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Delete All Confirmation Dialog */}
-      <Dialog open={deleteAllDialogOpen} onOpenChange={setDeleteAllDialogOpen}>
-        <DialogContent>
+      {/* Delete all */}
+      <Dialog open={deleteAllDialogOpen} onOpenChange={(open) => !isDeleting && setDeleteAllDialogOpen(open)}>
+        <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>Delete All Invoices</DialogTitle>
+            <DialogTitle>Delete all invoices?</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete all {invoices.length} invoices for this client? This action cannot be undone and will permanently remove all invoice data.
+              This permanently deletes all {totalInvoices} invoices for
+              this client. This can&apos;t be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeleteAllDialogOpen(false)}
-              disabled={isDeleting}
-              className="cursor-pointer hover:bg-gray-100 transition-colors duration-200"
-            >
+            <Button variant="outline" onClick={() => setDeleteAllDialogOpen(false)} disabled={isDeleting}>
               Cancel
             </Button>
-            <LoadingButton
-              variant="destructive"
-              onClick={handleDeleteAll}
-              loading={isDeleting}
-              className="cursor-pointer hover:bg-red-700 transition-colors duration-200"
-              errorMessage="Failed to delete all invoices. Please try again."
-            >
-              Delete All
-            </LoadingButton>
+            <Button variant="destructive" onClick={handleDeleteAll} loading={isDeleting}>
+              {isDeleting ? "Deleting…" : "Delete all"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

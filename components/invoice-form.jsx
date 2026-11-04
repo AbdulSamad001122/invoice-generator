@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import LoadingButton from "@/components/ui/loading-button";
+import { useToast } from "@/contexts/ToastContext";
+import { normalizePaymentUrl } from "@/app/utils/paymentLink";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -37,6 +39,8 @@ import {
   Check,
   ArrowLeft,
   CornerDownRight,
+  ImagePlus,
+  Upload,
 } from "lucide-react";
 import { useItems } from "@/contexts/ItemContext";
 import { getDefaultTemplate } from "@/app/utils/templates/registry";
@@ -52,6 +56,7 @@ import {
 } from "@/app/utils/invoiceItems";
 import TemplateSelector from "@/components/template-selector";
 import axios from "axios";
+import { Spinner } from "@/components/ui/spinner";
 
 export default function InvoiceForm({
   invoice,
@@ -92,6 +97,7 @@ export default function InvoiceForm({
         { itemName: "", description: "", quantity: 1, rate: 0 },
       ],
       includeDescription: invoiceData?.includeDescription || false,
+      includeQuantity: invoiceData?.includeQuantity !== false,
       taxRate: invoiceData?.taxRate || 0,
       discountRate: invoiceData?.discountRate || 0,
       // Additional Information
@@ -100,6 +106,8 @@ export default function InvoiceForm({
       // Payment Information
       bankName: invoiceData?.bankName || "",
       bankAccount: invoiceData?.bankAccount || "",
+      paymentLink: invoiceData?.paymentLink || "",
+      paymentLinkText: invoiceData?.paymentLinkText || "",
       // Template Selection
       selectedTemplate: invoiceData?.selectedTemplate || getDefaultTemplate(),
     };
@@ -129,6 +137,7 @@ export default function InvoiceForm({
           { itemName: "", description: "", quantity: 1, rate: 0 },
         ],
         includeDescription: invoiceData?.includeDescription || false,
+        includeQuantity: invoiceData?.includeQuantity !== false,
         taxRate: invoiceData?.taxRate || 0,
         discountRate: invoiceData?.discountRate || 0,
         // Additional Information
@@ -137,6 +146,8 @@ export default function InvoiceForm({
         // Payment Information
         bankName: invoiceData?.bankName || "",
         bankAccount: invoiceData?.bankAccount || "",
+        paymentLink: invoiceData?.paymentLink || "",
+        paymentLinkText: invoiceData?.paymentLinkText || "",
         // Template Selection
         selectedTemplate: invoiceData?.selectedTemplate || getDefaultTemplate(),
       });
@@ -144,6 +155,9 @@ export default function InvoiceForm({
   }, [invoice]);
 
   const [errors, setErrors] = useState({});
+  const [isSaving, setIsSaving] = useState(false);
+  const logoInputRef = useRef(null);
+  const { toast } = useToast();
 
   // Download the PDF code in the background so Preview/Download are instant
   useEffect(() => {
@@ -210,7 +224,9 @@ export default function InvoiceForm({
     };
 
     loadAvailableItems();
-  }, [preselectedClient, getItemsForClient]);
+    // Only refetch when the client changes (getItemsForClient is a new function every render)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preselectedClient?.id]);
 
   // Auto-fetch company profile data for new invoices
   useEffect(() => {
@@ -287,10 +303,14 @@ export default function InvoiceForm({
       newErrors.clientName = "Client name is required";
     }
 
-    if (!formData.clientEmail.trim()) {
-      newErrors.clientEmail = "Client email is required";
-    } else if (!/\S+@\S+\.\S+/.test(formData.clientEmail)) {
+    // Client email is optional (clients can be saved without one); check the format if given
+    if (formData.clientEmail.trim() && !/\S+@\S+\.\S+/.test(formData.clientEmail)) {
       newErrors.clientEmail = "Please enter a valid email address";
+    }
+
+    // Payment link (optional) must be a valid web address
+    if (formData.paymentLink?.trim() && !normalizePaymentUrl(formData.paymentLink)) {
+      newErrors.paymentLink = "Enter a valid link, e.g. https://pay.example.com/invoice";
     }
 
     // Tax and discount validation
@@ -309,7 +329,7 @@ export default function InvoiceForm({
         if (!(line.itemName || "").trim()) {
           newErrors[`${prefix}_itemName`] = "Item name is required";
         }
-        if (!line.quantity || line.quantity <= 0) {
+        if (formData.includeQuantity !== false && (!line.quantity || line.quantity <= 0)) {
           newErrors[`${prefix}_quantity`] = "Quantity must be greater than 0";
         }
         if (!line.rate || line.rate <= 0) {
@@ -336,38 +356,42 @@ export default function InvoiceForm({
     return Object.keys(newErrors).length === 0;
   };
 
+  // Saves the invoice. Returns the API response data, or null if nothing was saved.
+  const saveInvoice = async () => {
+    const invoicePayload = {
+      ...formData,
+      clientId: preselectedClient?.id || null,
+    };
+    const response =
+      invoice && invoice.id
+        ? await axios.put(`/api/invoices?id=${invoice.id}`, invoicePayload)
+        : await axios.post("/api/createInvoice", invoicePayload);
+    return response.data;
+  };
+
   const handleSubmit = async (e) => {
-    e.preventDefault();
+    e?.preventDefault();
+    if (isSaving) return; // ignore double clicks / repeated Enter presses
 
-    if (validateForm()) {
-      try {
-        console.log(formData);
-        // Send invoice data to API route with client ID
-        const invoicePayload = {
-          ...formData,
-          clientId: preselectedClient?.id || null,
-        };
+    if (!validateForm()) {
+      toast.error("Please fix the highlighted fields.");
+      return;
+    }
 
-        let response;
-        if (invoice && invoice.id) {
-          // Update existing invoice
-          response = await axios.put(
-            `/api/invoices?id=${invoice.id}`,
-            invoicePayload
-          );
-          console.log("Invoice updated successfully:", response.data);
-        } else {
-          // Create new invoice
-          response = await axios.post("/api/createInvoice", invoicePayload);
-          console.log("Invoice created successfully:", response.data);
-        }
-
-        onInvoiceCreated(response.data);
-      } catch (error) {
-        console.error("Error saving invoice:", error);
-        // Still call onInvoiceCreated to maintain current functionality
-        onInvoiceCreated(formData);
-      }
+    setIsSaving(true);
+    try {
+      const data = await saveInvoice();
+      toast.success(invoice ? "Invoice updated" : "Invoice created");
+      onInvoiceCreated(data);
+    } catch (error) {
+      console.error("Error saving invoice:", error);
+      // Keep the form open so nothing the user typed is lost
+      toast.error(
+        error?.response?.data?.error ||
+          (invoice ? "Couldn't update the invoice. Please try again." : "Couldn't create the invoice. Please try again.")
+      );
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -404,6 +428,47 @@ export default function InvoiceForm({
     const errorKey = `item_${index}_${field}`;
     if (errors[errorKey]) {
       setErrors((prev) => ({ ...prev, [errorKey]: "" }));
+    }
+  };
+
+  // Turning quantity off treats every line (and sub-item) as quantity 1,
+  // so the amount is just the price and totals stay correct.
+  const handleQuantityToggle = (checked) => {
+    // When hiding quantity, fold quantity × rate into the price so every line
+    // amount (and the invoice total) stays exactly the same.
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const fold = (line) => {
+      const qty = Number(line.quantity) || 1;
+      return qty === 1
+        ? { ...line, quantity: 1 }
+        : { ...line, quantity: 1, rate: round2(qty * (Number(line.rate) || 0)) };
+    };
+    const changed = !checked && formData.items.some(
+      (item) =>
+        (Number(item.quantity) || 1) !== 1 ||
+        (item.subItems || []).some((sub) => (Number(sub.quantity) || 1) !== 1)
+    );
+    setFormData((prev) => ({
+      ...prev,
+      includeQuantity: checked,
+      items: checked
+        ? prev.items
+        : prev.items.map((item) => ({
+            ...fold(item),
+            ...(Array.isArray(item.subItems) ? { subItems: item.subItems.map(fold) } : {}),
+          })),
+    }));
+    if (changed) {
+      toast.info("Quantities were folded into the prices, so the totals stay the same.");
+    }
+    if (!checked) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        Object.keys(next)
+          .filter((k) => k.endsWith("_quantity"))
+          .forEach((k) => delete next[k]);
+        return next;
+      });
     }
   };
 
@@ -515,7 +580,7 @@ export default function InvoiceForm({
     setFormData((prev) => {
       // Limit custom fields to prevent memory issues (max 20 fields per type)
       if (prev[fieldKey].length >= 20) {
-        alert(
+        toast.warning(
           `Maximum of 20 custom fields allowed for ${fieldType} information.`
         );
         return prev;
@@ -540,7 +605,7 @@ export default function InvoiceForm({
 
     // Limit field value length to prevent memory issues (max 500 characters)
     if (value.length > 500) {
-      alert(`Custom field ${field} cannot exceed 500 characters.`);
+      toast.warning(`Custom field ${field} cannot exceed 500 characters.`);
       return;
     }
 
@@ -571,12 +636,15 @@ export default function InvoiceForm({
       showStatusOnPDF: showStatusOnPDF,
       items: prepareItemsForPDF(formData.items),
       includeDescription: formData.includeDescription,
+      includeQuantity: formData.includeQuantity !== false,
       taxRate: formData.taxRate,
       discountRate: formData.discountRate,
       notes: formData.notes || "Thank you for your business!",
       terms: formData.terms,
       bankName: formData.bankName,
       bankAccount: formData.bankAccount,
+      paymentLink: normalizePaymentUrl(formData.paymentLink) || "",
+      paymentLinkText: formData.paymentLinkText,
       selectedTemplate: formData.selectedTemplate,
     };
   };
@@ -615,7 +683,7 @@ export default function InvoiceForm({
       }
     } catch (error) {
       console.error("Error generating PDF preview:", error);
-      alert("Error generating PDF preview. Please try again.");
+      toast.error("Couldn't generate the PDF preview. Please try again.");
     }
   };
 
@@ -644,31 +712,21 @@ export default function InvoiceForm({
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Error downloading PDF:", error);
-      alert("Error downloading PDF. Please try again.");
+      toast.error("Couldn't download the PDF. Please try again.");
     }
   };
 
   const handleCreateAndDownload = async () => {
+    if (isSaving) return;
     if (!validateForm()) {
+      toast.error("Please fix the highlighted fields.");
       return;
     }
 
+    setIsSaving(true);
     try {
       // First create/update the invoice
-      const invoicePayload = {
-        ...formData,
-        clientId: preselectedClient?.id || null,
-      };
-
-      let response;
-      if (invoice && invoice.id) {
-        response = await axios.put(
-          `/api/invoices?id=${invoice.id}`,
-          invoicePayload
-        );
-      } else {
-        response = await axios.post("/api/createInvoice", invoicePayload);
-      }
+      const response = { data: await saveInvoice() };
 
       // Then download the PDF
       const invoiceData = generateInvoiceData();
@@ -691,37 +749,47 @@ export default function InvoiceForm({
       onInvoiceCreated(response.data);
     } catch (error) {
       console.error("Error creating and downloading invoice:", error);
-      alert("Error creating and downloading invoice. Please try again.");
+      toast.error("Couldn't create and download the invoice. Please try again.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      {/* Back to Dashboard Button */}
-      <div className="mb-6">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleBackToDashboard}
-          className="flex items-center space-x-2"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          <span>Back to Dashboard</span>
-        </Button>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-4">
+      {/* Back to the client (or dashboard) */}
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onCancel || handleBackToDashboard}
+        disabled={isSaving}
+        className="-ml-2 text-muted-foreground"
+      >
+        <ArrowLeft />
+        {preselectedClient?.name ? `Back to ${preselectedClient.name}` : "Back to dashboard"}
+      </Button>
 
       <Card>
-        <CardHeader>
-          <CardTitle>
-            {invoice ? "Edit Invoice" : "Create New Invoice"}
+        <CardHeader className="border-b">
+          <CardTitle className="text-xl">
+            {invoice ? "Edit invoice" : "New invoice"}
+            {formData.invoiceNumber && (
+              <span className="ml-2 font-mono text-base font-normal text-muted-foreground">
+                {formData.invoiceNumber}
+              </span>
+            )}
           </CardTitle>
           <CardDescription>
-            Fill in the details below to {invoice ? "update" : "create"} your
-            invoice
+            {preselectedClient?.name
+              ? `For ${preselectedClient.name}`
+              : `Fill in the details below to ${invoice ? "update" : "create"} your invoice`}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form
+            onSubmit={handleSubmit}
+            className="space-y-6 [&_label+input]:mt-2 [&_label+textarea]:mt-2 [&_label+button[role=combobox]]:mt-2 [&_label+div]:mt-2"
+          >
             {/* Invoice Details */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <div>
@@ -739,14 +807,14 @@ export default function InvoiceForm({
                       ? "Generating invoice number..."
                       : "INV-001"
                   }
-                  className={`${errors.invoiceNumber ? "border-red-500" : ""} ${
-                    isLoadingAutoData ? "bg-gray-100 text-gray-500" : ""
+                  className={`${errors.invoiceNumber ? "border-destructive" : ""} ${
+                    isLoadingAutoData ? "bg-muted text-muted-foreground" : ""
                   }`}
                   disabled={isLoadingAutoData}
                   readOnly={isLoadingAutoData}
                 />
                 {errors.invoiceNumber && (
-                  <p className="text-red-500 text-sm mt-1">
+                  <p className="text-destructive text-sm mt-1">
                     {errors.invoiceNumber}
                   </p>
                 )}
@@ -765,7 +833,7 @@ export default function InvoiceForm({
               </div>
 
               <div>
-                <Label htmlFor="dueDate" className="dark:text-gray-200">
+                <Label htmlFor="dueDate" className="">
                   Due Date *
                 </Label>
                 <Input
@@ -773,10 +841,10 @@ export default function InvoiceForm({
                   type="date"
                   value={formData.dueDate}
                   onChange={(e) => handleInputChange("dueDate", e.target.value)}
-                  className={errors.dueDate ? "border-red-500" : ""}
+                  className={errors.dueDate ? "border-destructive" : ""}
                 />
                 {errors.dueDate && (
-                  <p className="text-red-500 dark:text-red-400 text-sm mt-1">
+                  <p className="text-destructive text-sm mt-1">
                     {errors.dueDate}
                   </p>
                 )}
@@ -802,7 +870,7 @@ export default function InvoiceForm({
 
             {/* Template Selection */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Template Selection</h3>
+              <h3 className="text-base font-semibold">Template Selection</h3>
               <TemplateSelector
                 selectedTemplate={formData.selectedTemplate}
                 onTemplateChange={(templateId) =>
@@ -828,7 +896,7 @@ export default function InvoiceForm({
 
             {/* Company Details */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Company Information</h3>
+              <h3 className="text-base font-semibold">Company Information</h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -846,14 +914,14 @@ export default function InvoiceForm({
                         ? "Generating company name..."
                         : "Your Company Name"
                     }
-                    className={`${errors.companyName ? "border-red-500" : ""} ${
-                      isLoadingCompanyProfile ? "bg-gray-100 text-gray-500" : ""
+                    className={`${errors.companyName ? "border-destructive" : ""} ${
+                      isLoadingCompanyProfile ? "bg-muted text-muted-foreground" : ""
                     }`}
                     disabled={isLoadingCompanyProfile}
                     readOnly={isLoadingCompanyProfile}
                   />
                   {errors.companyName && (
-                    <p className="text-red-500 text-sm mt-1">
+                    <p className="text-destructive text-sm mt-1">
                       {errors.companyName}
                     </p>
                   )}
@@ -875,14 +943,14 @@ export default function InvoiceForm({
                         ? "Generating company email..."
                         : "company@example.com"
                     }
-                    className={`${errors.companyEmail ? "border-red-500" : ""} ${
-                      isLoadingCompanyProfile ? "bg-gray-100 text-gray-500" : ""
+                    className={`${errors.companyEmail ? "border-destructive" : ""} ${
+                      isLoadingCompanyProfile ? "bg-muted text-muted-foreground" : ""
                     }`}
                     disabled={isLoadingCompanyProfile}
                     readOnly={isLoadingCompanyProfile}
                   />
                   {errors.companyEmail && (
-                    <p className="text-red-500 text-sm mt-1">
+                    <p className="text-destructive text-sm mt-1">
                       {errors.companyEmail}
                     </p>
                   )}
@@ -891,47 +959,70 @@ export default function InvoiceForm({
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="companyLogo" className="dark:text-gray-200">
+                  <Label htmlFor="companyLogo" className="">
                     Company Logo
                   </Label>
                   {isLoadingCompanyProfile ? (
-                    <div className="flex items-center space-x-2 p-2 bg-gray-100 rounded border">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
-                      <span className="text-gray-500 text-sm">Generating company logo...</span>
+                    <div className="flex items-center space-x-2 p-2 bg-muted rounded border">
+                      <Spinner className="size-4 text-muted-foreground" />
+                      <span className="text-muted-foreground text-sm">Generating company logo...</span>
                     </div>
                   ) : (
-                    <Input
-                      id="companyLogo"
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onload = (event) => {
-                            handleInputChange("companyLogo", event.target.result);
-                          };
-                          reader.readAsDataURL(file);
-                        }
-                      }}
-                      className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                    />
-                  )}
-                  {formData.companyLogo && (
-                    <div className="mt-2">
-                      <div className="flex items-center gap-2">
-                        <img
-                          src={formData.companyLogo}
-                          alt="Company Logo Preview"
-                          className="w-16 h-16 object-contain border rounded"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleInputChange("companyLogo", "")}
-                          className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
-                        >
-                          Remove
-                        </button>
+                    <div className="flex items-center gap-4">
+                      {/* Hidden native input, opened by the button below */}
+                      <input
+                        ref={logoInputRef}
+                        id="companyLogo"
+                        type="file"
+                        accept="image/*"
+                        className="sr-only"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            const reader = new FileReader();
+                            reader.onload = (event) => {
+                              handleInputChange("companyLogo", event.target.result);
+                            };
+                            reader.readAsDataURL(file);
+                          }
+                          e.target.value = ""; // allow picking the same file again
+                        }}
+                      />
+                      <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/50">
+                        {formData.companyLogo ? (
+                          <img
+                            src={formData.companyLogo}
+                            alt="Company logo preview"
+                            className="size-full object-contain p-1"
+                          />
+                        ) : (
+                          <ImagePlus className="size-6 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => logoInputRef.current?.click()}
+                          >
+                            <Upload />
+                            {formData.companyLogo ? "Change logo" : "Upload logo"}
+                          </Button>
+                          {formData.companyLogo && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive hover:text-destructive/80"
+                              onClick={() => handleInputChange("companyLogo", "")}
+                            >
+                              Remove
+                            </Button>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground">PNG, JPG or SVG. Square works best.</p>
                       </div>
                     </div>
                   )}
@@ -1001,7 +1092,7 @@ export default function InvoiceForm({
                       variant="outline"
                       size="sm"
                       onClick={() => removeCustomField("company", index)}
-                      className="flex items-center gap-2 text-red-600 hover:text-red-700"
+                      className="flex items-center gap-2 text-destructive hover:text-destructive/80"
                     >
                       <Trash2 className="h-4 w-4" />
                       Remove
@@ -1015,7 +1106,7 @@ export default function InvoiceForm({
 
             {/* Client Details */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Client Information</h3>
+              <h3 className="text-base font-semibold">Client Information</h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1033,22 +1124,22 @@ export default function InvoiceForm({
                     placeholder={
                       isLoadingAutoData ? "Loading client name..." : "John Doe"
                     }
-                    className={`${errors.clientName ? "border-red-500" : ""} ${
-                      isLoadingAutoData ? "bg-gray-100 text-gray-500" : ""
+                    className={`${errors.clientName ? "border-destructive" : ""} ${
+                      isLoadingAutoData ? "bg-muted text-muted-foreground" : ""
                     }`}
                     disabled={isLoadingAutoData}
                     readOnly={isLoadingAutoData}
                   />
                   {errors.clientName && (
-                    <p className="text-red-500 text-sm mt-1">
+                    <p className="text-destructive text-sm mt-1">
                       {errors.clientName}
                     </p>
                   )}
                 </div>
 
                 <div>
-                  <Label htmlFor="clientEmail" className="dark:text-gray-200">
-                    Client Email *
+                  <Label htmlFor="clientEmail" className="">
+                    Client Email <span className="font-normal text-muted-foreground">(optional)</span>
                   </Label>
                   <Input
                     id="clientEmail"
@@ -1066,14 +1157,14 @@ export default function InvoiceForm({
                         ? "Loading client email..."
                         : "john@example.com"
                     }
-                    className={`${errors.clientEmail ? "border-red-500" : ""} ${
-                      isLoadingAutoData ? "bg-gray-100 text-gray-500" : ""
+                    className={`${errors.clientEmail ? "border-destructive" : ""} ${
+                      isLoadingAutoData ? "bg-muted text-muted-foreground" : ""
                     }`}
                     disabled={isLoadingAutoData}
                     readOnly={isLoadingAutoData}
                   />
                   {errors.clientEmail && (
-                    <p className="text-red-500 dark:text-red-400 text-sm mt-1">
+                    <p className="text-destructive text-sm mt-1">
                       {errors.clientEmail}
                     </p>
                   )}
@@ -1143,7 +1234,7 @@ export default function InvoiceForm({
                       variant="outline"
                       size="sm"
                       onClick={() => removeCustomField("client", index)}
-                      className="flex items-center gap-2 text-red-600 hover:text-red-700"
+                      className="flex items-center gap-2 text-destructive hover:text-destructive/80"
                     >
                       <Trash2 className="h-4 w-4" />
                       Remove
@@ -1158,7 +1249,7 @@ export default function InvoiceForm({
             {/* Items */}
             <div className="space-y-4">
               <div className="flex justify-between items-center">
-                <h3 className="text-lg font-semibold dark:text-white">Items</h3>
+                <h3 className="text-base font-semibold">Items</h3>
                 <div className="flex gap-2">
                   {availableItems.length > 0 && (
                     <Dialog
@@ -1182,17 +1273,17 @@ export default function InvoiceForm({
                           {availableItems.map((item) => (
                             <div
                               key={item.id}
-                              className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 cursor-pointer"
+                              className="flex items-center justify-between p-3 border rounded-lg hover:bg-accent cursor-pointer"
                               onClick={() => handleSavedItemSelect(item)}
                             >
                               <div className="flex-1">
                                 <h4 className="font-medium">{item.name}</h4>
                                 {item.description && (
-                                  <p className="text-sm text-gray-600">
+                                  <p className="text-sm text-muted-foreground">
                                     {item.description}
                                   </p>
                                 )}
-                                <p className="text-sm font-semibold text-green-600">
+                                <p className="text-sm font-semibold text-foreground">
                                   ${Number(item.price).toFixed(2)}
                                 </p>
                               </div>
@@ -1224,7 +1315,8 @@ export default function InvoiceForm({
                 </div>
               </div>
 
-              {/* Include Description Toggle */}
+              {/* Item field toggles */}
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
               <div className="flex items-center space-x-2">
                 <Switch
                   id="includeDescription"
@@ -1240,21 +1332,33 @@ export default function InvoiceForm({
                   Include description field for items
                 </Label>
               </div>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="includeQuantity"
+                  checked={formData.includeQuantity !== false}
+                  onCheckedChange={handleQuantityToggle}
+                />
+                <Label htmlFor="includeQuantity" className="text-sm font-medium">
+                  Show quantity
+                </Label>
+              </div>
+              </div>
 
               {errors.items && (
-                <p className="text-red-500 text-sm">{errors.items}</p>
+                <p className="text-destructive text-sm">{errors.items}</p>
               )}
 
               <div className="space-y-3">
                 {formData.items.map((item, index) => {
                   const subItems = getSubItems(item);
                   const isGroup = subItems.length > 0;
+                  const showQuantity = formData.includeQuantity !== false;
                   const nameSpan = formData.includeDescription
-                    ? "md:col-span-3"
-                    : "md:col-span-5";
+                    ? showQuantity ? "md:col-span-3" : "md:col-span-5"
+                    : showQuantity ? "md:col-span-5" : "md:col-span-7";
                   const fieldError = (key) =>
                     errors[key] ? (
-                      <p className="text-red-500 dark:text-red-400 text-sm mt-1">
+                      <p className="text-destructive text-sm mt-1">
                         {errors[key]}
                       </p>
                     ) : null;
@@ -1264,7 +1368,7 @@ export default function InvoiceForm({
                       key={index}
                       className={
                         isGroup
-                          ? "rounded-lg border border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20 p-3 space-y-3"
+                          ? "rounded-lg border bg-muted/40 p-3 space-y-3"
                           : "space-y-2"
                       }
                     >
@@ -1285,7 +1389,7 @@ export default function InvoiceForm({
                             }
                             className={`${isGroup ? "font-semibold" : ""} ${
                               errors[`item_${index}_itemName`]
-                                ? "border-red-500"
+                                ? "border-destructive"
                                 : ""
                             }`}
                           />
@@ -1313,13 +1417,13 @@ export default function InvoiceForm({
                         )}
 
                         {isGroup ? (
-                          <div className="md:col-span-4 h-10 flex items-center text-sm text-gray-500 dark:text-gray-400">
+                          <div className={`${showQuantity ? "md:col-span-4" : "md:col-span-2"} h-10 flex items-center text-sm text-muted-foreground`}>
                             Total of {subItems.length} sub-item
                             {subItems.length === 1 ? "" : "s"}
                           </div>
                         ) : (
                           <>
-                            <div className="md:col-span-2">
+                            <div className={showQuantity ? "md:col-span-2" : "hidden"}>
                               <Label htmlFor={`quantity-${index}`}>Quantity</Label>
                               <Input
                                 id={`quantity-${index}`}
@@ -1340,7 +1444,7 @@ export default function InvoiceForm({
                                 }
                                 className={
                                   errors[`item_${index}_quantity`]
-                                    ? "border-red-500"
+                                    ? "border-destructive"
                                     : ""
                                 }
                               />
@@ -1348,7 +1452,7 @@ export default function InvoiceForm({
                             </div>
 
                             <div className="md:col-span-2">
-                              <Label htmlFor={`rate-${index}`}>Rate ($)</Label>
+                              <Label htmlFor={`rate-${index}`}>{showQuantity ? "Rate ($)" : "Price ($)"}</Label>
                               <Input
                                 id={`rate-${index}`}
                                 type="number"
@@ -1369,7 +1473,7 @@ export default function InvoiceForm({
                                 }
                                 className={
                                   errors[`item_${index}_rate`]
-                                    ? "border-red-500"
+                                    ? "border-destructive"
                                     : ""
                                 }
                               />
@@ -1383,8 +1487,8 @@ export default function InvoiceForm({
                           <div
                             className={`h-10 flex items-center px-3 border rounded-md ${
                               isGroup
-                                ? "bg-blue-100 dark:bg-blue-900/40 font-semibold"
-                                : "bg-gray-50 dark:bg-gray-800"
+                                ? "bg-muted font-semibold"
+                                : "bg-muted/50"
                             }`}
                           >
                             ${calculateItemAmount(item).toFixed(2)}
@@ -1407,7 +1511,7 @@ export default function InvoiceForm({
 
                       {/* Sub-item rows */}
                       {isGroup && (
-                        <div className="ml-2 md:ml-4 pl-3 md:pl-4 border-l-2 border-blue-300 dark:border-blue-700 space-y-2">
+                        <div className="ml-2 md:ml-4 pl-3 md:pl-4 border-l-2 border-border space-y-2">
                           {subItems.map((sub, subIndex) => {
                             const prefix = `item_${index}_sub_${subIndex}`;
                             return (
@@ -1416,7 +1520,7 @@ export default function InvoiceForm({
                                 className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start"
                               >
                                 <div className={`${nameSpan} flex items-start gap-2`}>
-                                  <CornerDownRight className="w-4 h-4 mt-3 shrink-0 text-blue-400" />
+                                  <CornerDownRight className="w-4 h-4 mt-3 shrink-0 text-muted-foreground" />
                                   <div className="flex-1">
                                     <Input
                                       aria-label="Sub-item name"
@@ -1432,7 +1536,7 @@ export default function InvoiceForm({
                                       placeholder="e.g. Home page changes"
                                       className={
                                         errors[`${prefix}_itemName`]
-                                          ? "border-red-500"
+                                          ? "border-destructive"
                                           : ""
                                       }
                                     />
@@ -1458,7 +1562,7 @@ export default function InvoiceForm({
                                   </div>
                                 )}
 
-                                <div className="md:col-span-2">
+                                <div className={showQuantity ? "md:col-span-2" : "hidden"}>
                                   <Input
                                     aria-label="Sub-item quantity"
                                     type="number"
@@ -1480,7 +1584,7 @@ export default function InvoiceForm({
                                     placeholder="Qty"
                                     className={
                                       errors[`${prefix}_quantity`]
-                                        ? "border-red-500"
+                                        ? "border-destructive"
                                         : ""
                                     }
                                   />
@@ -1510,7 +1614,7 @@ export default function InvoiceForm({
                                     placeholder="Rate"
                                     className={
                                       errors[`${prefix}_rate`]
-                                        ? "border-red-500"
+                                        ? "border-destructive"
                                         : ""
                                     }
                                   />
@@ -1518,7 +1622,7 @@ export default function InvoiceForm({
                                 </div>
 
                                 <div className="md:col-span-2">
-                                  <div className="h-10 flex items-center px-3 border rounded-md bg-white dark:bg-gray-800 text-sm text-gray-600 dark:text-gray-300">
+                                  <div className="h-10 flex items-center px-3 border rounded-md bg-card text-sm text-muted-foreground">
                                     ${calculateLineAmount(sub).toFixed(2)}
                                   </div>
                                 </div>
@@ -1531,7 +1635,7 @@ export default function InvoiceForm({
                                     size="sm"
                                     aria-label="Remove sub-item"
                                   >
-                                    <Trash2 className="w-4 h-4 text-gray-500" />
+                                    <Trash2 className="w-4 h-4 text-muted-foreground" />
                                   </Button>
                                 </div>
                               </div>
@@ -1545,7 +1649,7 @@ export default function InvoiceForm({
                         variant="ghost"
                         size="sm"
                         onClick={() => addSubItem(index)}
-                        className="text-blue-600 hover:text-blue-700 dark:text-blue-400 h-8 px-2"
+                        className="h-8 px-2 text-muted-foreground hover:text-foreground"
                       >
                         <Plus className="w-3.5 h-3.5 mr-1" />
                         Add sub-item
@@ -1556,7 +1660,7 @@ export default function InvoiceForm({
               </div>
 
               <div className="text-right">
-                <div className="text-xl font-bold dark:text-white">
+                <div className="text-xl font-bold">
                   Total: ${calculateTotal().toFixed(2)}
                 </div>
               </div>
@@ -1566,13 +1670,13 @@ export default function InvoiceForm({
 
             {/* Tax and Discount */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold dark:text-white">
+              <h3 className="text-base font-semibold">
                 Tax & Discount
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="taxRate" className="dark:text-gray-200">
+                  <Label htmlFor="taxRate" className="">
                     Tax Rate (%)
                   </Label>
                   <Input
@@ -1594,17 +1698,17 @@ export default function InvoiceForm({
                       )
                     }
                     placeholder="10"
-                    className={errors.taxRate ? "border-red-500" : ""}
+                    className={errors.taxRate ? "border-destructive" : ""}
                   />
                   {errors.taxRate && (
-                    <p className="text-red-500 dark:text-red-400 text-sm mt-1">
+                    <p className="text-destructive text-sm mt-1">
                       {errors.taxRate}
                     </p>
                   )}
                 </div>
 
                 <div>
-                  <Label htmlFor="discountRate" className="dark:text-gray-200">
+                  <Label htmlFor="discountRate" className="">
                     Discount Rate (%)
                   </Label>
                   <Input
@@ -1626,10 +1730,10 @@ export default function InvoiceForm({
                       )
                     }
                     placeholder="0"
-                    className={errors.discountRate ? "border-red-500" : ""}
+                    className={errors.discountRate ? "border-destructive" : ""}
                   />
                   {errors.discountRate && (
-                    <p className="text-red-500 dark:text-red-400 text-sm mt-1">
+                    <p className="text-destructive text-sm mt-1">
                       {errors.discountRate}
                     </p>
                   )}
@@ -1641,13 +1745,13 @@ export default function InvoiceForm({
 
             {/* Payment Information */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold dark:text-white">
+              <h3 className="text-base font-semibold">
                 Payment Information
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="bankName" className="dark:text-gray-200">
+                  <Label htmlFor="bankName" className="">
                     Bank Name
                   </Label>
                   <Input
@@ -1661,7 +1765,7 @@ export default function InvoiceForm({
                 </div>
 
                 <div>
-                  <Label htmlFor="bankAccount" className="dark:text-gray-200">
+                  <Label htmlFor="bankAccount" className="">
                     Bank Account Number
                   </Label>
                   <Input
@@ -1673,6 +1777,41 @@ export default function InvoiceForm({
                     placeholder="123-456-7890"
                   />
                 </div>
+
+                <div>
+                  <Label htmlFor="paymentLink">Payment link</Label>
+                  <Input
+                    id="paymentLink"
+                    type="url"
+                    inputMode="url"
+                    value={formData.paymentLink}
+                    onChange={(e) => handleInputChange("paymentLink", e.target.value)}
+                    placeholder="https://pay.stripe.com/..."
+                    className={errors.paymentLink ? "border-destructive" : ""}
+                  />
+                  {errors.paymentLink ? (
+                    <p className="text-destructive text-sm mt-1">{errors.paymentLink}</p>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Optional. Shown on the PDF as a clickable link.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <Label htmlFor="paymentLinkText">Link text</Label>
+                  <Input
+                    id="paymentLinkText"
+                    value={formData.paymentLinkText}
+                    onChange={(e) => handleInputChange("paymentLinkText", e.target.value)}
+                    placeholder="Pay this invoice online"
+                    maxLength={60}
+                    disabled={!formData.paymentLink?.trim()}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    The words shown on the invoice. Clicking them opens the link.
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -1681,7 +1820,7 @@ export default function InvoiceForm({
             {/* Additional Information */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="notes" className="dark:text-gray-200">
+                <Label htmlFor="notes" className="">
                   Notes
                 </Label>
                 <textarea
@@ -1689,12 +1828,12 @@ export default function InvoiceForm({
                   value={formData.notes}
                   onChange={(e) => handleInputChange("notes", e.target.value)}
                   placeholder="Additional notes..."
-                  className="w-full min-h-[100px] px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:placeholder-gray-400"
+                  className="w-full min-h-[100px] rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
                 />
               </div>
 
               <div>
-                <Label htmlFor="terms" className="dark:text-gray-200">
+                <Label htmlFor="terms" className="">
                   Terms & Conditions
                 </Label>
                 <textarea
@@ -1702,15 +1841,15 @@ export default function InvoiceForm({
                   value={formData.terms}
                   onChange={(e) => handleInputChange("terms", e.target.value)}
                   placeholder="Payment terms and conditions..."
-                  className="w-full min-h-[100px] px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:placeholder-gray-400"
+                  className="w-full min-h-[100px] rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
                 />
               </div>
             </div>
 
             {/* Action Buttons */}
-            <div className="flex flex-wrap gap-2 justify-center pt-6">
+            <div className="sticky bottom-0 z-10 -mx-6 -mb-6 flex flex-wrap justify-end gap-2 rounded-b-xl border-t bg-card/95 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-card/80">
               {onCancel && (
-                <Button type="button" variant="outline" onClick={onCancel}>
+                <Button type="button" variant="outline" onClick={onCancel} disabled={isSaving}>
                   Cancel
                 </Button>
               )}
@@ -1718,6 +1857,7 @@ export default function InvoiceForm({
                 type="button"
                 variant="outline"
                 onClick={previewPDF}
+                disabled={isSaving}
                 errorMessage="Failed to generate PDF preview. Please check your data and try again."
               >
                 Preview PDF
@@ -1726,6 +1866,7 @@ export default function InvoiceForm({
                 type="button"
                 variant="outline"
                 onClick={downloadPDF}
+                disabled={isSaving}
                 errorMessage="Failed to download PDF. Please check your data and try again."
               >
                 Download Only
@@ -1733,7 +1874,9 @@ export default function InvoiceForm({
               {!invoice && (
                 <LoadingButton
                   type="button"
+                  variant="outline"
                   onClick={handleCreateAndDownload}
+                  disabled={isSaving}
                   errorMessage="Failed to create and download invoice. Please check your data and try again."
                 >
                   Create & Download
@@ -1742,6 +1885,8 @@ export default function InvoiceForm({
               <LoadingButton
                 type="submit"
                 onClick={handleSubmit}
+                loading={isSaving}
+                loadingText={invoice ? "Saving…" : "Creating…"}
                 errorMessage={
                   invoice
                     ? "Failed to update invoice. Please check your data and try again."

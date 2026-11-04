@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import SidebarAwareNavbar from "@/components/SidebarAwareNavbar";
+import { themeInitScript } from "@/lib/themeScript";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -25,14 +26,32 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "Invoice Generator",
+  title: {
+    default: "Invoice Generator",
+    template: "%s · Invoice Generator",
+  },
   description: "Create professional invoices with client management",
+};
+
+export const viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+  ],
 };
 
 export default function RootLayout({ children }) {
   return (
-    <ClerkProvider>
+    <ClerkProvider
+      appearance={{
+        variables: { colorPrimary: "#171717", borderRadius: "0.625rem" },
+      }}
+    >
       <html lang="en" suppressHydrationWarning={true}>
+        <head>
+          {/* Apply the saved theme before first paint (no light flash in dark mode) */}
+          <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        </head>
         <body
           className={`${geistSans.variable} ${geistMono.variable} antialiased`}
         >
@@ -46,7 +65,7 @@ export default function RootLayout({ children }) {
                       <SidebarInset>
                         <div className="flex flex-col min-h-screen">
                           <SidebarAwareNavbar />
-                          <main className="flex-1 space-y-4 p-4 md:p-8 pt-6">
+                          <main className="flex-1 w-full max-w-7xl mx-auto px-4 py-6 md:px-8 md:py-8">
                             {children}
                           </main>
                         </div>

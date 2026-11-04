@@ -514,10 +514,15 @@ function SidebarMenuButton({
       onClick={handleClick}
       disabled={isButtonLoading}
       {...props}>
-      {isButtonLoading && (
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+      {/* Slot (asChild) needs exactly one child, so the spinner is only added for real buttons */}
+      {asChild ? (
+        children
+      ) : (
+        <>
+          {isButtonLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {children}
+        </>
       )}
-      {children}
     </Comp>
   )
 

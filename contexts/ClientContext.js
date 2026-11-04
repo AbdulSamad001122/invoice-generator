@@ -117,7 +117,9 @@ export function ClientProvider({ children }) {
       const newClient = response.data;
 
       // Optimistically update the client list
-      setClients((prev) => [...prev, newClient]);
+      // Newest first, matching the server order; keep the total in sync
+      setClients((prev) => [newClient, ...prev.filter((c) => c.id !== newClient.id)]);
+      setPagination((prev) => ({ ...prev, totalCount: (prev.totalCount || 0) + 1 }));
       setLastFetch(Date.now());
 
       return newClient;
@@ -159,6 +161,7 @@ export function ClientProvider({ children }) {
 
       // Optimistically update the client list
       setClients((prev) => prev.filter((client) => client.id !== clientId));
+      setPagination((prev) => ({ ...prev, totalCount: Math.max(0, (prev.totalCount || 0) - 1) }));
       setLastFetch(Date.now());
     } catch (err) {
       console.error("Error deleting client:", err);

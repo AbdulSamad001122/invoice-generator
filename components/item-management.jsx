@@ -59,25 +59,17 @@ export default function ItemManagement() {
   };
 
   return (
-    <div className="container mx-auto p-6">
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Items</h1>
+        <p className="text-sm text-muted-foreground">
+          Save the products and services you bill often, then add them to any invoice in one click.
+        </p>
+      </div>
       <Card>
-        <CardHeader>
-          <div className="flex items-center gap-4 mb-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleBackToDashboard}
-              className="flex items-center gap-2"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back to Dashboard
-            </Button>
-          </div>
-          <CardTitle>Item Management</CardTitle>
-          <CardDescription>
-            Save items with details and assign them to clients for easy invoice
-            creation.
-          </CardDescription>
+        <CardHeader className="sr-only">
+          <CardTitle>Saved items</CardTitle>
+          <CardDescription>Filter saved items by client.</CardDescription>
         </CardHeader>
         <CardContent>
           {/* Client Filter Section */}
@@ -117,7 +109,7 @@ export default function ItemManagement() {
             {/* Selected Filters Display */}
             {(selectedClients.length > 0 || showAllClients) && (
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm text-gray-600">Filtering by:</span>
+                <span className="text-sm text-muted-foreground">Filtering by:</span>
                 {showAllClients && (
                   <Badge variant="default" className="flex items-center gap-1">
                     <Globe className="h-3 w-3" />
@@ -149,7 +141,7 @@ export default function ItemManagement() {
                 {selectedClients.length > 0 && (
                   <button
                     onClick={clearAllFilters}
-                    className="text-xs text-gray-500 hover:text-gray-700 underline"
+                    className="text-xs text-muted-foreground hover:text-foreground underline"
                   >
                     Clear all
                   </button>

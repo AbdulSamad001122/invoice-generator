@@ -1,5 +1,6 @@
 "use client";
 
+import { useToast } from "@/contexts/ToastContext";
 import { useState, useRef, useEffect } from "react";
 import {
   Card,
@@ -36,6 +37,7 @@ import {
 } from "lucide-react";
 import { useItems } from "@/contexts/ItemContext";
 import { ItemForm } from "./item-form";
+import { Spinner } from "@/components/ui/spinner";
 
 export function ItemList({ selectedClients = [], showAllClients = false }) {
   const { items, loading, loadingMore, pagination, deleteItem, loadMoreItems, fetchItems } = useItems();
@@ -49,6 +51,7 @@ export function ItemList({ selectedClients = [], showAllClients = false }) {
   const [showItemForm, setShowItemForm] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [deletingItemId, setDeletingItemId] = useState(null);
+  const { toast } = useToast();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState(null);
 
@@ -112,7 +115,7 @@ export function ItemList({ selectedClients = [], showAllClients = false }) {
         setItemToDelete(null);
       } catch (error) {
         console.error("Error deleting item:", error);
-        alert("Failed to delete item. Please try again.");
+        toast.error("Couldn't delete the item. Please try again.");
       } finally {
         setDeletingItemId(null);
       }
@@ -138,7 +141,7 @@ export function ItemList({ selectedClients = [], showAllClients = false }) {
       <Card>
         <CardContent className="p-6">
           <div className="flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <Spinner className="size-8 text-primary" />
             <span className="ml-2">Loading items...</span>
           </div>
         </CardContent>
@@ -166,7 +169,7 @@ export function ItemList({ selectedClients = [], showAllClients = false }) {
         <CardContent>
           {/* Search */}
           <div className="relative mb-6">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
             <Input
               placeholder="Search items..."
               value={searchQuery}
@@ -178,13 +181,13 @@ export function ItemList({ selectedClients = [], showAllClients = false }) {
           {/* Items List */}
           {filteredItems.length === 0 ? (
             <div className="text-center py-12">
-              <div className="mx-auto w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-                <Plus className="h-8 w-8 text-gray-400" />
+              <div className="mx-auto w-24 h-24 bg-muted rounded-full flex items-center justify-center mb-4">
+                <Plus className="h-8 w-8 text-muted-foreground" />
               </div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
+              <h3 className="text-lg font-medium text-foreground mb-2">
                 {searchQuery ? "No items found" : "No items yet"}
               </h3>
-              <p className="text-gray-500 mb-4">
+              <p className="text-muted-foreground mb-4">
                 {searchQuery
                   ? "Try adjusting your search terms"
                   : "Create your first reusable item to speed up invoice creation"}
@@ -216,13 +219,13 @@ export function ItemList({ selectedClients = [], showAllClients = false }) {
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
                         <h3 className="font-semibold text-lg">{item.name}</h3>
-                        <span className="text-lg font-bold text-green-600">
+                        <span className="text-lg font-bold text-foreground">
                           ${parseFloat(item.price).toFixed(2)}
                         </span>
                       </div>
 
                       {item.description && (
-                        <p className="text-gray-600 mb-3">{item.description}</p>
+                        <p className="text-muted-foreground mb-3">{item.description}</p>
                       )}
 
                       <div className="flex items-center gap-2">
@@ -287,7 +290,7 @@ export function ItemList({ selectedClients = [], showAllClients = false }) {
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => handleDeleteItem(item.id)}
-                          className="text-red-600"
+                          className="text-destructive"
                           disabled={deletingItemId === item.id}
                         >
                           <Trash2 className="h-4 w-4 mr-2" />
@@ -304,15 +307,15 @@ export function ItemList({ selectedClients = [], showAllClients = false }) {
               {/* Loading more indicator */}
               {loadingMore && (
                 <div className="flex items-center justify-center py-4">
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 dark:border-blue-400"></div>
-                  <span className="ml-2 text-sm text-gray-600 dark:text-gray-300">Loading more items...</span>
+                  <Spinner className="size-5 text-muted-foreground" />
+                  <span className="ml-2 text-sm text-muted-foreground">Loading more items...</span>
                 </div>
               )}
               
               {/* End of list indicator */}
               {!pagination.hasMore && items.length > 0 && filteredItems.length > 0 && (
                 <div className="text-center py-4">
-                  <span className="text-xs text-gray-500 dark:text-gray-400">No more items to load</span>
+                  <span className="text-xs text-muted-foreground">No more items to load</span>
                 </div>
               )}
             </div>
@@ -343,14 +346,14 @@ export function ItemList({ selectedClients = [], showAllClients = false }) {
             <Button
               variant="outline"
               onClick={cancelDelete}
-              className="cursor-pointer hover:bg-gray-100 transition-colors duration-200"
+              
             >
               Cancel
             </Button>
             <Button
               variant="destructive"
               onClick={confirmDelete}
-              className="cursor-pointer hover:bg-red-700 transition-colors duration-200"
+              
             >
               Delete
             </Button>

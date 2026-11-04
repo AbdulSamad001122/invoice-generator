@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { X } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 
 export function ClientForm({ onClose, onClientAdded }) {
   const [formData, setFormData] = useState({
@@ -173,7 +174,7 @@ export function ClientForm({ onClose, onClientAdded }) {
                 className="flex-1"
                 disabled={loading || !formData.name || !formData.name.trim() || !formData.email || !formData.email.trim()}
               >
-                {loading && <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />}
+                {loading && <Spinner className="size-4" />}
                 Create Client
               </Button>
             </div>

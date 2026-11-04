@@ -5,6 +5,7 @@ import {
   subItemPdfStyles as subStyles,
   SUB_ITEM_BULLET,
 } from "../invoiceItems";
+import { normalizePaymentUrl, getPaymentLinkText, displayUrl } from "../paymentLink";
 import {
   Document,
   Page,
@@ -12,6 +13,7 @@ import {
   View,
   StyleSheet,
   Image,
+  Link,
 } from "@react-pdf/renderer";
 
 // Create styles for Blue Modern Template
@@ -368,6 +370,16 @@ const BlueModernTemplate = ({ invoiceData }) => {
     showStatusOnPDF = false,
   } = invoiceData;
 
+  // Quantity can be hidden for the whole invoice: then Qty/Price columns are hidden
+  // and the item/description columns take their space.
+  const showQuantity = invoiceData.includeQuantity !== false;
+  const growCol = showQuantity ? {} : { width: "auto", flexGrow: 1, flexBasis: 0 };
+
+  // Optional payment link
+  const paymentUrl = normalizePaymentUrl(invoiceData.paymentLink);
+  const paymentLinkText = getPaymentLinkText(invoiceData.paymentLinkText);
+  const hasCustomLinkText = Boolean(String(invoiceData.paymentLinkText || "").trim());
+
   // Calculate totals
   const subtotal = calculateItemsSubtotal(items);
   const taxAmount = (subtotal * (taxRate || 0)) / 100;
@@ -474,36 +486,40 @@ const BlueModernTemplate = ({ invoiceData }) => {
                 styles.tableHeaderCell,
                 invoiceData.includeDescription
                   ? styles.itemNameHeader
-                  : styles.itemNameHeaderWide,
+                  : styles.itemNameHeaderWide, growCol,
               ]}
             >
               Item Name
             </Text>
             {invoiceData.includeDescription && (
-              <Text style={[styles.tableHeaderCell, styles.descriptionHeader]}>
+              <Text style={[styles.tableHeaderCell, styles.descriptionHeader, growCol]}>
                 Description
               </Text>
             )}
-            <Text
-              style={[
-                styles.tableHeaderCell,
-                invoiceData.includeDescription
-                  ? styles.qtyHeader
-                  : styles.qtyHeaderWide,
-              ]}
-            >
-              Qty
-            </Text>
-            <Text
-              style={[
-                styles.tableHeaderCell,
-                invoiceData.includeDescription
-                  ? styles.priceHeader
-                  : styles.priceHeaderWide,
-              ]}
-            >
-              Price
-            </Text>
+            {showQuantity && (
+              <Text
+                style={[
+                  styles.tableHeaderCell,
+                  invoiceData.includeDescription
+                    ? styles.qtyHeader
+                    : styles.qtyHeaderWide,
+                ]}
+              >
+                Qty
+              </Text>
+            )}
+            {showQuantity && (
+              <Text
+                style={[
+                  styles.tableHeaderCell,
+                  invoiceData.includeDescription
+                    ? styles.priceHeader
+                    : styles.priceHeaderWide,
+                ]}
+              >
+                Price
+              </Text>
+            )}
             <Text
               style={[
                 styles.tableHeaderCell,
@@ -533,7 +549,7 @@ const BlueModernTemplate = ({ invoiceData }) => {
                       styles.tableCell,
                       invoiceData.includeDescription
                         ? styles.itemNameCell
-                        : styles.itemNameCellWide,
+                        : styles.itemNameCellWide, growCol,
                       isGroup ? subStyles.groupName : null,
                       isSub ? subStyles.subName : null,
                     ]}
@@ -542,32 +558,36 @@ const BlueModernTemplate = ({ invoiceData }) => {
                     {item.itemName || "Your Item Name"}
                   </Text>
                   {invoiceData.includeDescription && (
-                    <Text style={[styles.tableCell, styles.descriptionCell, subCell]}>
+                    <Text style={[styles.tableCell, styles.descriptionCell, growCol, subCell]}>
                       {item.description || ""}
                     </Text>
                   )}
-                  <Text
-                    style={[
-                      styles.tableCell,
-                      invoiceData.includeDescription
-                        ? styles.qtyCell
-                        : styles.qtyCellWide,
-                      subCell,
-                    ]}
-                  >
-                    {isGroup ? "" : item.quantity || 1}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.tableCell,
-                      invoiceData.includeDescription
-                        ? styles.priceCell
-                        : styles.priceCellWide,
-                      subCell,
-                    ]}
-                  >
-                    {isGroup ? "" : `$ ${(item.rate || 0).toFixed(2)}`}
-                  </Text>
+                  {showQuantity && (
+                    <Text
+                      style={[
+                        styles.tableCell,
+                        invoiceData.includeDescription
+                          ? styles.qtyCell
+                          : styles.qtyCellWide,
+                        subCell,
+                      ]}
+                    >
+                      {isGroup ? "" : item.quantity || 1}
+                    </Text>
+                  )}
+                  {showQuantity && (
+                    <Text
+                      style={[
+                        styles.tableCell,
+                        invoiceData.includeDescription
+                          ? styles.priceCell
+                          : styles.priceCellWide,
+                        subCell,
+                      ]}
+                    >
+                      {isGroup ? "" : `$ ${(item.rate || 0).toFixed(2)}`}
+                    </Text>
+                  )}
                   <Text
                     style={[
                       styles.tableCell,
@@ -591,36 +611,40 @@ const BlueModernTemplate = ({ invoiceData }) => {
                       styles.tableCell,
                       invoiceData.includeDescription
                         ? styles.itemNameCell
-                        : styles.itemNameCellWide,
+                        : styles.itemNameCellWide, growCol,
                     ]}
                   >
                     Your Item Name
                   </Text>
                   {invoiceData.includeDescription && (
                     <Text
-                      style={[styles.tableCell, styles.descriptionCell]}
+                      style={[styles.tableCell, styles.descriptionCell, growCol]}
                     ></Text>
                   )}
-                  <Text
-                    style={[
-                      styles.tableCell,
-                      invoiceData.includeDescription
-                        ? styles.qtyCell
-                        : styles.qtyCellWide,
-                    ]}
-                  >
-                    1
-                  </Text>
-                  <Text
-                    style={[
-                      styles.tableCell,
-                      invoiceData.includeDescription
-                        ? styles.priceCell
-                        : styles.priceCellWide,
-                    ]}
-                  >
-                    $ 0.00
-                  </Text>
+                  {showQuantity && (
+                    <Text
+                      style={[
+                        styles.tableCell,
+                        invoiceData.includeDescription
+                          ? styles.qtyCell
+                          : styles.qtyCellWide,
+                      ]}
+                    >
+                      1
+                    </Text>
+                  )}
+                  {showQuantity && (
+                    <Text
+                      style={[
+                        styles.tableCell,
+                        invoiceData.includeDescription
+                          ? styles.priceCell
+                          : styles.priceCellWide,
+                      ]}
+                    >
+                      $ 0.00
+                    </Text>
+                  )}
                   <Text
                     style={[
                       styles.tableCell,
@@ -674,7 +698,7 @@ const BlueModernTemplate = ({ invoiceData }) => {
                 "Thank you for your business! We appreciate your trust in our services and look forward to working with you again."}
             </Text>
           </View>
-          {(invoiceData.bankName || invoiceData.bankAccount) && (
+          {(invoiceData.bankName || invoiceData.bankAccount || paymentUrl) && (
             <View style={styles.paymentSection}>
               <Text style={styles.paymentTitle}>Payment Information:</Text>
               {invoiceData.bankName && (
@@ -686,6 +710,32 @@ const BlueModernTemplate = ({ invoiceData }) => {
                 <Text style={styles.paymentText}>
                   Account: {invoiceData.bankAccount}
                 </Text>
+              )}
+              {paymentUrl && (
+                <View style={{ marginTop: 6 }}>
+                  <Link
+                    src={paymentUrl}
+                    style={[
+                      styles.paymentText,
+                      {
+                        color: "#1E40AF",
+                        textDecoration: "underline",
+                        fontFamily: "Helvetica-Bold",
+                      },
+                    ]}
+                  >
+                    {paymentLinkText} »
+                  </Link>
+                  {/* Show the raw URL only when no custom link text was given */}
+                  {!hasCustomLinkText && (
+                    <Link
+                      src={paymentUrl}
+                      style={[styles.paymentText, { color: "#6B7280", fontSize: 8, textDecoration: "none" }]}
+                    >
+                      {displayUrl(paymentUrl)}
+                    </Link>
+                  )}
+                </View>
               )}
             </View>
           )}

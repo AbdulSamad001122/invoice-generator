@@ -69,6 +69,7 @@ export async function POST(request) {
         data: {
           ...originalInvoice.data,
           invoiceNumber: newInvoiceNumber,
+          status: "PENDING", // a copy is a new, unpaid invoice
           invoiceDate: issueDate,
           issueDate, // The invoice form reads issueDate
           dueDate, // Uses the user's default due days (falls back to 30)

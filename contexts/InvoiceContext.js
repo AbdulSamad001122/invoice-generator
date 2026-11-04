@@ -31,6 +31,8 @@ export function InvoiceProvider({ children }) {
   const paginationRef = useRef({});
   const invoicesRef = useRef({});
   const loadingMoreRef = useRef({});
+  // Active search filters per client, so "load more" keeps filtering
+  const searchParamsRef = useRef({});
   useEffect(() => { lastFetchRef.current = lastFetch; }, [lastFetch]);
   useEffect(() => { paginationRef.current = pagination; }, [pagination]);
   useEffect(() => { invoicesRef.current = invoicesByClient; }, [invoicesByClient]);
@@ -79,6 +81,10 @@ export function InvoiceProvider({ children }) {
 
     // Always fetch when search parameters are provided
     const hasSearchParams = Object.keys(searchParams).some(key => searchParams[key]);
+    // Remember (or clear) the active filters for this client
+    if (reset || hasSearchParams) {
+      searchParamsRef.current = { ...searchParamsRef.current, [clientId]: hasSearchParams ? searchParams : null };
+    }
 
     // Check if we have fresh data and don't need to force refresh
     const lastFetchTime = lastFetchRef.current[clientId];
@@ -154,10 +160,13 @@ export function InvoiceProvider({ children }) {
         }
       }));
       
-      lastFetchRef.current = { ...lastFetchRef.current, [clientId]: Date.now() };
+      // A filtered list is not the client's full list: don't treat it as a fresh
+      // cache, so coming back to this client loads the full list again.
+      const fetchedAt = hasSearchParams ? 0 : Date.now();
+      lastFetchRef.current = { ...lastFetchRef.current, [clientId]: fetchedAt };
       setLastFetch(prev => ({
         ...prev,
-        [clientId]: Date.now()
+        [clientId]: fetchedAt
       }));
       
       // Cleanup cache if needed
@@ -185,7 +194,16 @@ export function InvoiceProvider({ children }) {
       setError(prev => ({ ...prev, [clientId]: null }));
       
       const nextPage = clientPagination.page + 1;
-      const response = await axios.get(`/api/invoices?clientId=${clientId}&page=${nextPage}&limit=${clientPagination.limit}`);
+      const query = new URLSearchParams({
+        clientId,
+        page: String(nextPage),
+        limit: String(clientPagination.limit),
+      });
+      const activeSearch = searchParamsRef.current[clientId];
+      if (activeSearch?.search) query.append("search", activeSearch.search);
+      if (activeSearch?.date) query.append("date", activeSearch.date);
+      if (activeSearch?.status) query.append("status", activeSearch.status);
+      const response = await axios.get(`/api/invoices?${query.toString()}`);
       
       const newInvoices = response.data.invoices || [];
       
@@ -225,12 +243,20 @@ export function InvoiceProvider({ children }) {
   const createInvoice = useCallback(async (newInvoice) => {
     try {
       const clientId = newInvoice.clientId;
-      
+
+      // Keep the total in sync (checked outside the state updater, which may run twice)
+      const alreadyListed = (invoicesRef.current[clientId] || []).some(inv => inv.id === newInvoice.id);
+      if (!alreadyListed) {
+        setPagination(p => p[clientId]
+          ? { ...p, [clientId]: { ...p[clientId], totalCount: (p[clientId].totalCount || 0) + 1 } }
+          : p);
+      }
+
       // Add the already created invoice to the list
       setInvoicesByClient(prev => {
         const existingInvoices = prev[clientId] || [];
         const existingIds = new Set(existingInvoices.map(invoice => invoice.id));
-        
+
         // Only add if it doesn't already exist
         if (!existingIds.has(newInvoice.id)) {
           return {
@@ -309,6 +335,9 @@ export function InvoiceProvider({ children }) {
       const duplicatedInvoice = response.data.invoice;
       
       // Add the duplicated invoice to the beginning of the list
+      setPagination(prev => prev[clientId]
+        ? { ...prev, [clientId]: { ...prev[clientId], totalCount: (prev[clientId].totalCount || 0) + 1 } }
+        : prev);
       setInvoicesByClient(prev => {
         const existingInvoices = prev[clientId] || [];
         return {
@@ -388,6 +417,12 @@ export function InvoiceProvider({ children }) {
     return fetchInvoices(clientId, true, true); // force refresh and reset pagination
   }, [fetchInvoices]);
 
+  // Mark every cached client list as stale so it reloads next time it's shown
+  const invalidateAllInvoices = useCallback(() => {
+    lastFetchRef.current = {};
+    setLastFetch({});
+  }, []);
+
   const clearClientInvoices = useCallback((clientId) => {
     setInvoicesByClient(prev => {
       const newState = { ...prev };
@@ -430,6 +465,7 @@ export function InvoiceProvider({ children }) {
     getInvoiceById,
     refreshInvoices,
     clearClientInvoices,
+    invalidateAllInvoices,
     lastFetch
   };
 

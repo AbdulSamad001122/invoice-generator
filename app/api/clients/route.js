@@ -178,7 +178,11 @@ export async function POST(request) {
       );
     }
 
-    const emailValidation = validateEmail(email);
+    // Email is optional for clients (stored as null); validate it only when given
+    const emailValidation =
+      typeof email === "string" && email.trim()
+        ? validateEmail(email)
+        : { isValid: true, value: null };
     if (!emailValidation.isValid) {
       return NextResponse.json(
         { error: emailValidation.error },
@@ -261,7 +265,11 @@ export async function PUT(request) {
       );
     }
 
-    const emailValidation = validateEmail(email);
+    // Email is optional for clients (stored as null); validate it only when given
+    const emailValidation =
+      typeof email === "string" && email.trim()
+        ? validateEmail(email)
+        : { isValid: true, value: null };
     if (!emailValidation.isValid) {
       return NextResponse.json(
         { error: emailValidation.error },

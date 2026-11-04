@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { X, Plus } from "lucide-react";
+import { X, Plus, Check } from "lucide-react";
 import { useItems } from "@/contexts/ItemContext";
 import { useClients } from "@/contexts/ClientContext";
 
@@ -186,10 +186,10 @@ export function ItemForm({ onClose, onItemAdded, editItem = null }) {
                 placeholder="e.g., Laptop, Consulting Service"
                 value={formData.name}
                 onChange={(e) => handleInputChange("name", e.target.value)}
-                className={errors.name ? "border-red-500" : ""}
+                className={errors.name ? "border-destructive" : ""}
               />
               {errors.name && (
-                <p className="text-sm text-red-500">{errors.name}</p>
+                <p className="text-sm text-destructive">{errors.name}</p>
               )}
             </div>
 
@@ -204,10 +204,10 @@ export function ItemForm({ onClose, onItemAdded, editItem = null }) {
                 placeholder="e.g., 1200.00"
                 value={formData.price}
                 onChange={(e) => handleInputChange("price", e.target.value)}
-                className={errors.price ? "border-red-500" : ""}
+                className={errors.price ? "border-destructive" : ""}
               />
               {errors.price && (
-                <p className="text-sm text-red-500">{errors.price}</p>
+                <p className="text-sm text-destructive">{errors.price}</p>
               )}
             </div>
 
@@ -264,7 +264,7 @@ export function ItemForm({ onClose, onItemAdded, editItem = null }) {
 
                   <div className="border rounded-lg p-3 max-h-40 overflow-y-auto">
                     {clients.length === 0 ? (
-                      <p className="text-sm text-gray-500 text-center py-2">
+                      <p className="text-sm text-muted-foreground text-center py-2">
                         No clients available. Create a client first.
                       </p>
                     ) : (
@@ -278,8 +278,8 @@ export function ItemForm({ onClose, onItemAdded, editItem = null }) {
                               key={client.id}
                               className={`flex items-center justify-between p-2 rounded cursor-pointer transition-colors ${
                                 isSelected
-                                  ? "bg-blue-50 border border-blue-200"
-                                  : "hover:bg-gray-50"
+                                  ? "bg-accent border border-border"
+                                  : "hover:bg-accent"
                               }`}
                               onClick={() => handleClientToggle(client)}
                             >
@@ -288,7 +288,7 @@ export function ItemForm({ onClose, onItemAdded, editItem = null }) {
                                   {client.name}
                                 </p>
                                 {client.email && (
-                                  <p className="text-xs text-gray-500">
+                                  <p className="text-xs text-muted-foreground">
                                     {client.email}
                                   </p>
                                 )}
@@ -296,12 +296,12 @@ export function ItemForm({ onClose, onItemAdded, editItem = null }) {
                               <div
                                 className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
                                   isSelected
-                                    ? "bg-blue-500 border-blue-500"
-                                    : "border-gray-300"
+                                    ? "bg-primary border-primary text-primary-foreground"
+                                    : "border-border"
                                 }`}
                               >
                                 {isSelected && (
-                                  <Plus className="h-2 w-2 text-white rotate-45" />
+                                  <Check className="size-3" />
                                 )}
                               </div>
                             </div>
@@ -312,15 +312,15 @@ export function ItemForm({ onClose, onItemAdded, editItem = null }) {
                   </div>
 
                   {errors.clients && (
-                    <p className="text-sm text-red-500">{errors.clients}</p>
+                    <p className="text-sm text-destructive">{errors.clients}</p>
                   )}
                 </div>
               )}
             </div>
 
             {errors.submit && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-md">
-                <p className="text-sm text-red-600">{errors.submit}</p>
+              <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-md">
+                <p className="text-sm text-destructive">{errors.submit}</p>
               </div>
             )}
 
@@ -335,7 +335,8 @@ export function ItemForm({ onClose, onItemAdded, editItem = null }) {
               </Button>
               <LoadingButton
                 type="submit"
-                disabled={loading}
+                loading={loading}
+                loadingText={editItem ? "Saving…" : "Adding…"}
                 onClick={handleSubmit}
                 errorMessage={
                   editItem

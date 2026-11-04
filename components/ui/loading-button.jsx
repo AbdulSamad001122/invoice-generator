@@ -2,72 +2,49 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { useToast } from "@/contexts/ToastContext";
 
+// A button for async actions: while onClick's promise runs it is disabled and
+// shows a spinner. Errors thrown by onClick are shown as a toast.
 const LoadingButton = ({
   children,
   onClick,
   disabled = false,
-  variant = "default",
-  size = "default",
-  className,
   showErrorToast = true,
-  errorMessage = "An error occurred. Please try again.",
-  loading: externalLoading = false, // Accept external loading prop
+  errorMessage = "Something went wrong. Please try again.",
+  loading: externalLoading = false,
+  loadingText,
   ...props
 }) => {
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  // Use external loading state if provided, otherwise use internal state
-  const currentLoading = externalLoading || isLoading;
+  const { toast } = useToast();
+  const busy = externalLoading || isLoading;
 
   const handleClick = async (e) => {
-    if (!onClick || currentLoading || disabled) return;
-
-    // Only manage internal loading state if no external loading is provided
-    if (!externalLoading) {
-      setIsLoading(true);
-    }
-    setError(null);
-
+    if (!onClick || busy || disabled) return;
+    setIsLoading(true);
     try {
       await onClick(e);
     } catch (err) {
       console.error("Button action failed:", err);
-      const errorMsg = err.message || errorMessage;
-      setError(errorMsg);
-
       if (showErrorToast) {
-        // You can integrate with your toast system here
-        // For now, we'll use a simple alert
-        alert(errorMsg);
+        toast.error(err?.response?.data?.error || err?.message || errorMessage);
       }
     } finally {
-      // Only reset internal loading state if no external loading is provided
-      if (!externalLoading) {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="space-y-2">
-      <Button
-        {...props}
-        variant={variant}
-        size={size}
-        className={cn(className)}
-        disabled={disabled || currentLoading}
-        loading={currentLoading}
-        onClick={handleClick}
-      >
-        {children}
-      </Button>
-      {error && (
-        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-      )}
-    </div>
+    <Button
+      {...props}
+      disabled={disabled || busy}
+      loading={busy}
+      onClick={handleClick}
+      aria-busy={busy}
+    >
+      {busy && loadingText ? loadingText : children}
+    </Button>
   );
 };
 

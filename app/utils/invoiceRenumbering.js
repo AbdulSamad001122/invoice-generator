@@ -57,11 +57,12 @@ export async function generateNextInvoiceNumber(clientId, userId, autoRenumber =
     // For non-auto-renumbering clients, the database finds the highest
     // "INV-<number>" in one query instead of downloading every invoice.
     const [row] = await prisma.$queryRaw`
-      SELECT COALESCE(MAX((substring(data->>'invoiceNumber' from 'INV-([0-9]+)'))::bigint), 0) AS max_number
+      SELECT COALESCE(MAX((substring(data->>'invoiceNumber' from 'INV-([0-9]+)'))::numeric), 0) AS max_number
       FROM invoices
       WHERE client_id = ${clientId} AND user_id = ${userId}
     `;
-    const maxNumber = Number(row?.max_number ?? 0);
+    // numeric (not bigint) so a very long typed number can never overflow the query
+    const maxNumber = Number(String(row?.max_number ?? 0));
 
     return `INV-${maxNumber + 1}`;
   } catch (error) {

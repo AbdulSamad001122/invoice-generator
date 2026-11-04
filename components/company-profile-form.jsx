@@ -16,6 +16,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { X, Upload, Building2, ImageIcon, Trash2 } from "lucide-react";
 import { useAuth } from "@clerk/nextjs";
 import { useToast } from "@/contexts/ToastContext";
+import { Spinner } from "@/components/ui/spinner";
 
 export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = true, initialData = null }) {
   const { userId } = useAuth();
@@ -256,7 +257,7 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
   if (initialLoading) {
     return (
       <div className="flex items-center justify-center p-8">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+        <Spinner className="size-8 text-primary" />
       </div>
     );
   }
@@ -272,10 +273,10 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
             value={formData.companyName}
             onChange={(e) => handleInputChange("companyName", e.target.value)}
             placeholder="Enter your company name"
-            className={errors.companyName ? "border-red-500" : ""}
+            className={errors.companyName ? "border-destructive" : ""}
           />
           {errors.companyName && (
-            <p className="text-sm text-red-500">{errors.companyName}</p>
+            <p className="text-sm text-destructive">{errors.companyName}</p>
           )}
         </div>
 
@@ -287,38 +288,18 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
             value={formData.companyEmail}
             onChange={(e) => handleInputChange("companyEmail", e.target.value)}
             placeholder="Enter your company email"
-            className={errors.companyEmail ? "border-red-500" : ""}
+            className={errors.companyEmail ? "border-destructive" : ""}
           />
           {errors.companyEmail && (
-            <p className="text-sm text-red-500">{errors.companyEmail}</p>
+            <p className="text-sm text-destructive">{errors.companyEmail}</p>
           )}
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="companyLogo">Company Logo (Optional)</Label>
           
-          {/* Logo Preview */}
-          {logoPreview && (
-            <div className="relative inline-block">
-              <img
-                src={logoPreview}
-                alt="Company logo preview"
-                className="w-24 h-24 object-contain border border-gray-300 rounded-lg bg-gray-50"
-              />
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                className="absolute -top-2 -right-2 h-6 w-6 p-0 rounded-full"
-                onClick={removeLogo}
-              >
-                <Trash2 className="h-3 w-3" />
-              </Button>
-            </div>
-          )}
-          
-          {/* File Upload */}
-          <div className="flex items-center gap-2">
+          {/* Logo: thumbnail on the left, actions beside it (nothing overlaps the label) */}
+          <div className="flex items-center gap-4">
             <input
               ref={fileInputRef}
               type="file"
@@ -327,32 +308,53 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
               className="hidden"
               id="logoFileInput"
             />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploadingLogo}
-              className="flex items-center gap-2"
-            >
-              {uploadingLogo ? (
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+            <div className="flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/50">
+              {logoPreview ? (
+                <img
+                  src={logoPreview}
+                  alt="Company logo preview"
+                  className="size-full object-contain p-1"
+                />
               ) : (
-                <Upload className="h-4 w-4" />
+                <Building2 className="size-7 text-muted-foreground" />
               )}
-              {logoPreview ? 'Change Logo' : 'Upload Logo'}
-            </Button>
-            {logoFile && (
-              <span className="text-sm text-gray-600">
-                {logoFile.name}
-              </span>
-            )}
+            </div>
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingLogo}
+                >
+                  {uploadingLogo ? <Spinner className="size-4" /> : <Upload />}
+                  {uploadingLogo ? "Uploading…" : logoPreview ? "Change logo" : "Upload logo"}
+                </Button>
+                {logoPreview && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive/80"
+                    onClick={removeLogo}
+                    disabled={uploadingLogo}
+                  >
+                    <Trash2 /> Remove
+                  </Button>
+                )}
+              </div>
+              {logoFile && (
+                <span className="truncate text-xs text-muted-foreground">{logoFile.name}</span>
+              )}
+            </div>
           </div>
-          
+
           {errors.companyLogo && (
-            <p className="text-sm text-red-500">{errors.companyLogo}</p>
+            <p className="text-sm text-destructive">{errors.companyLogo}</p>
           )}
-          <p className="text-sm text-gray-500">
-            Upload your company logo image. Supported formats: JPG, PNG, GIF. Max size: 5MB.
+          <p className="text-sm text-muted-foreground">
+            PNG, JPG or GIF, up to 5 MB. Square images work best.
           </p>
         </div>
 
@@ -364,10 +366,10 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
             value={formData.bankName}
             onChange={(e) => handleInputChange("bankName", e.target.value)}
             placeholder="Enter your bank name"
-            className={errors.bankName ? "border-red-500" : ""}
+            className={errors.bankName ? "border-destructive" : ""}
           />
           {errors.bankName && (
-            <p className="text-sm text-red-500">{errors.bankName}</p>
+            <p className="text-sm text-destructive">{errors.bankName}</p>
           )}
         </div>
 
@@ -379,10 +381,10 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
             value={formData.bankAccount}
             onChange={(e) => handleInputChange("bankAccount", e.target.value)}
             placeholder="Enter your bank account number"
-            className={errors.bankAccount ? "border-red-500" : ""}
+            className={errors.bankAccount ? "border-destructive" : ""}
           />
           {errors.bankAccount && (
-            <p className="text-sm text-red-500">{errors.bankAccount}</p>
+            <p className="text-sm text-destructive">{errors.bankAccount}</p>
           )}
         </div>
 
@@ -396,12 +398,12 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
             value={formData.defaultDueDays}
             onChange={(e) => handleInputChange("defaultDueDays", e.target.value)}
             placeholder="Enter default due days (e.g., 7, 30)"
-            className={errors.defaultDueDays ? "border-red-500" : ""}
+            className={errors.defaultDueDays ? "border-destructive" : ""}
           />
           {errors.defaultDueDays && (
-            <p className="text-sm text-red-500">{errors.defaultDueDays}</p>
+            <p className="text-sm text-destructive">{errors.defaultDueDays}</p>
           )}
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted-foreground">
             Number of days from invoice date to due date (will auto-populate in invoices)
           </p>
         </div>
@@ -426,8 +428,8 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
       </div>
 
       {errors.submit && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-md">
-          <p className="text-sm text-red-600">{errors.submit}</p>
+        <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-md">
+          <p className="text-sm text-destructive">{errors.submit}</p>
         </div>
       )}
 
@@ -450,45 +452,8 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
     </form>
   );
 
-  if (!isModal) {
-    return (
-      <div className="max-w-md mx-auto">
-        <div className="mb-6 text-center">
-          <Building2 className="w-12 h-12 mx-auto mb-4 text-blue-600" />
-          <h2 className="text-2xl font-bold text-gray-900">Company Profile Setup</h2>
-          <p className="text-gray-600 mt-2">
-            Set up your company information to personalize your invoices
-          </p>
-        </div>
-        {formContent}
-      </div>
-    );
-  }
-
-  return (
-    <Card className="w-full max-w-md mx-auto">
-      <CardHeader className="relative">
-        {onClose && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="absolute right-2 top-2 h-8 w-8 p-0"
-            onClick={onClose}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        )}
-        <div className="flex items-center gap-2">
-          <Building2 className="w-6 h-6 text-blue-600" />
-          <CardTitle>Company Profile Setup</CardTitle>
-        </div>
-        <CardDescription>
-          Set up your company information to personalize your invoices
-        </CardDescription>
-      </CardHeader>
-      <CardContent>{formContent}</CardContent>
-    </Card>
-  );
+  // The page or dialog that shows this form provides the title and frame
+  return formContent;
 }
 
 export default CompanyProfileForm;

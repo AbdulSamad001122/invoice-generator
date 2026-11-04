@@ -1,81 +1,80 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
+import { ArrowLeft, Mail, Plus, UserX } from "lucide-react";
+import axios from "axios";
 import { useClients } from "@/contexts/ClientContext";
 import { useInvoices } from "@/contexts/InvoiceContext";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  ArrowLeft,
-  Plus,
-  FileText,
-  Calendar,
-  DollarSign,
-  User,
-  Mail,
-} from "lucide-react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
+import { PageLoader } from "@/components/ui/spinner";
 import InvoiceForm from "@/components/invoice-form";
 import InvoiceList from "@/components/invoice-list";
-import axios from "axios";
+
+const getInitials = (name = "") =>
+  name
+    .split(" ")
+    .filter(Boolean)
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2) || "?";
 
 export default function ClientDashboard() {
-  const { isLoaded, isSignedIn, user } = useUser();
+  const { isLoaded, isSignedIn } = useUser();
   const params = useParams();
   const router = useRouter();
   const clientId = params.id;
   const { getClientById, loading: clientsLoading } = useClients();
   const { createInvoice, updateInvoice } = useInvoices();
 
-  const [selectedClientId, setSelectedClientId] = useState(null);
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
 
-  // Get client from context instead of making API call
-  const client = getClientById(clientId);
-  const loading = clientsLoading;
+  // The sidebar only holds the first page of clients, so fetch this client
+  // directly when it isn't in that list (e.g. an older client or a shared link).
+  const clientFromList = getClientById(clientId);
+  const [fetchedClient, setFetchedClient] = useState(null);
+  const [notFound, setNotFound] = useState(false);
+  const client = clientFromList || (fetchedClient?.id === clientId ? fetchedClient : null);
 
   useEffect(() => {
-    if (clientId) {
-      setSelectedClientId(clientId);
-    }
+    setNotFound(false);
+    if (!isSignedIn || clientsLoading || clientFromList || !clientId) return;
+    let cancelled = false;
+    axios
+      .get(`/api/clients/${clientId}`)
+      .then((res) => !cancelled && setFetchedClient(res.data))
+      .catch(() => !cancelled && setNotFound(true));
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, isSignedIn, clientsLoading, clientFromList]);
+
+  // Leave the form when switching to another client
+  useEffect(() => {
+    setShowInvoiceForm(false);
+    setEditingInvoice(null);
   }, [clientId]);
 
-  const handleClientSelect = (selectedClient) => {
-    router.push(`/dashboard/${selectedClient.id}`);
-  };
-
-  const handleAddClient = (newClient) => {
-    // Handle new client addition if needed
-  };
+  useEffect(() => {
+    if (isLoaded && !isSignedIn) router.push("/signin");
+  }, [isLoaded, isSignedIn, router]);
 
   const handleInvoiceCreated = async (responseData) => {
-    console.log("Invoice operation completed:", responseData);
-    
     try {
       const invoiceObject = responseData.invoice || responseData;
-      
       if (editingInvoice) {
-        // For updates, pass the complete invoice object to context
         await updateInvoice(editingInvoice.id, invoiceObject);
       } else {
-        // For creation, pass the complete invoice object to context
         await createInvoice(invoiceObject);
       }
     } catch (error) {
       console.error("Error updating context:", error);
     }
-    
-    // Close the form and reset editing state
     setShowInvoiceForm(false);
     setEditingInvoice(null);
   };
@@ -85,98 +84,72 @@ export default function ClientDashboard() {
     setShowInvoiceForm(true);
   };
 
-  // Show loading state while Clerk is loading
-  if (!isLoaded) {
+  if (!isLoaded || !isSignedIn) return <PageLoader fullScreen />;
+
+  if (notFound) {
     return (
-      <div className="min-h-screen flex items-center justify-center dark:bg-gray-900">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900 dark:border-gray-100"></div>
+      <div className="flex flex-col items-center py-20 text-center">
+        <UserX className="mb-3 size-10 text-muted-foreground" />
+        <h1 className="text-lg font-semibold">Client not found</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          It may have been deleted, or the link is wrong.
+        </p>
+        <Button className="mt-6" variant="outline" asChild>
+          <Link href="/">
+            <ArrowLeft /> Back to dashboard
+          </Link>
+        </Button>
       </div>
     );
   }
 
-  // Redirect to sign in if not authenticated
-  if (!isSignedIn) {
-    router.push("/signin");
-    return null;
-  }
-
-  if (loading) {
+  if (showInvoiceForm && client) {
     return (
-      <div className="container mx-auto py-8">
-        <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-1/4"></div>
-          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/2"></div>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            {[...Array(4)].map((_, i) => (
-              <div
-                key={i}
-                className="h-24 bg-gray-200 dark:bg-gray-700 rounded"
-              ></div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (showInvoiceForm) {
-    return (
-      <div className="container mx-auto py-8">
-        <InvoiceForm
-          invoice={editingInvoice}
-          onInvoiceCreated={handleInvoiceCreated}
-          onCancel={() => {
-            setShowInvoiceForm(false);
-            setEditingInvoice(null);
-          }}
-          preselectedClient={client}
-        />
-      </div>
+      <InvoiceForm
+        invoice={editingInvoice}
+        onInvoiceCreated={handleInvoiceCreated}
+        onCancel={() => {
+          setShowInvoiceForm(false);
+          setEditingInvoice(null);
+        }}
+        preselectedClient={client}
+      />
     );
   }
 
   return (
-    <div className="container mx-auto py-8 pt-20 space-y-8 px-6">
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <SidebarTrigger className="" />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => router.push("/")}
-                className="flex items-center space-x-2"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                <span>Back to Dashboard</span>
-              </Button>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        {client ? (
+          <div className="flex min-w-0 items-center gap-4">
+            <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-base font-semibold text-primary">
+              {getInitials(client.name)}
+            </span>
+            <div className="min-w-0">
+              <h1 className="truncate text-2xl font-semibold tracking-tight">{client.name}</h1>
+              {client.email && (
+                <p className="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
+                  <Mail className="size-3.5" /> {client.email}
+                </p>
+              )}
             </div>
-            <div className="flex-1 flex justify-center">
-              <div className="space-y-2 text-center">
-                <h1 className="text-4xl font-bold tracking-tight text-gray-900 dark:text-white">
-                  {client?.name || "Loading..."}
-                </h1>
-                <div className="flex items-center justify-center space-x-2">
-                  <Mail className="h-4 w-4 text-blue-600" />
-                  <p className="text-lg font-medium text-gray-600 dark:text-gray-300">
-                    {client?.email}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <Button onClick={() => setShowInvoiceForm(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Create Invoice
-            </Button>
           </div>
+        ) : (
+          <div className="flex items-center gap-4">
+            <Skeleton className="size-12 rounded-full" />
+            <div className="space-y-2">
+              <Skeleton className="h-6 w-48" />
+              <Skeleton className="h-4 w-36" />
+            </div>
+          </div>
+        )}
+        <Button onClick={() => setShowInvoiceForm(true)} disabled={!client}>
+          <Plus /> New invoice
+        </Button>
+      </div>
 
-          {/* Invoice List */}
-          <div className="mt-8">
-            <InvoiceList
-              clientId={clientId}
-              onEditInvoice={handleEditInvoice}
-            />
-          </div>
-        </div>
+      <InvoiceList clientId={clientId} onEditInvoice={handleEditInvoice} />
+    </div>
   );
 }

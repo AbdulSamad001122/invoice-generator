@@ -92,7 +92,7 @@ export function ClientDetails({ client, onCreateInvoice }) {
       case "OVERDUE":
         return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
       default:
-        return "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200";
+        return "bg-muted text-foreground";
     }
   };
 
@@ -101,10 +101,10 @@ export function ClientDetails({ client, onCreateInvoice }) {
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center">
           <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-muted-foreground mb-2 dark:text-gray-300">
+          <h3 className="text-lg font-semibold text-muted-foreground mb-2">
             Select a Client
           </h3>
-          <p className="text-muted-foreground dark:text-gray-400">
+          <p className="text-muted-foreground">
             Choose a client from the sidebar to view their invoices
           </p>
         </div>
@@ -118,10 +118,10 @@ export function ClientDetails({ client, onCreateInvoice }) {
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-3xl font-bold dark:text-white">
+            <h1 className="text-3xl font-bold">
               {client.name}
             </h1>
-            <p className="text-muted-foreground dark:text-gray-400">
+            <p className="text-muted-foreground">
               {client.email}
             </p>
           </div>
@@ -135,43 +135,43 @@ export function ClientDetails({ client, onCreateInvoice }) {
           </LoadingButton>
         </div>
 
-        <Card className="dark:bg-gray-800 dark:border-gray-700">
+        <Card className="">
           <CardContent className="pt-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               <div>
-                <p className="text-sm font-medium text-muted-foreground dark:text-gray-400">
+                <p className="text-sm font-medium text-muted-foreground">
                   Email
                 </p>
-                <p className="text-sm dark:text-gray-200">{client.email}</p>
+                <p className="text-sm">{client.email}</p>
               </div>
               <div>
-                <p className="text-sm font-medium text-muted-foreground dark:text-gray-400">
+                <p className="text-sm font-medium text-muted-foreground">
                   Phone
                 </p>
-                <p className="text-sm dark:text-gray-200">
+                <p className="text-sm">
                   {client.phone || "Not provided"}
                 </p>
               </div>
               <div>
-                <p className="text-sm font-medium text-muted-foreground dark:text-gray-400">
+                <p className="text-sm font-medium text-muted-foreground">
                   Address
                 </p>
-                <p className="text-sm dark:text-gray-200">
+                <p className="text-sm">
                   {client.address || "Not provided"}
                 </p>
               </div>
             </div>
             
             {/* Invoice Settings */}
-            <div className="border-t pt-4 dark:border-gray-600">
+            <div className="border-t pt-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Settings className="h-4 w-4 text-muted-foreground" />
                   <div>
-                    <p className="text-sm font-medium dark:text-gray-200">
+                    <p className="text-sm font-medium">
                       Auto-renumber invoices
                     </p>
-                    <p className="text-xs text-muted-foreground dark:text-gray-400">
+                    <p className="text-xs text-muted-foreground">
                       Automatically renumber invoices when one is deleted
                     </p>
                   </div>
@@ -190,7 +190,7 @@ export function ClientDetails({ client, onCreateInvoice }) {
       {/* Invoices Section */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-semibold dark:text-white">Invoices</h2>
+          <h2 className="text-2xl font-semibold">Invoices</h2>
           <Badge variant="secondary">
             {invoices.length} {invoices.length === 1 ? "Invoice" : "Invoices"}
           </Badge>
@@ -198,19 +198,19 @@ export function ClientDetails({ client, onCreateInvoice }) {
 
         {isLoading ? (
           <div className="text-center py-8">
-            <p className="text-muted-foreground dark:text-gray-400">
+            <p className="text-muted-foreground">
               Loading invoices...
             </p>
           </div>
         ) : invoices.length === 0 ? (
-          <Card className="dark:bg-gray-800 dark:border-gray-700">
+          <Card className="">
             <CardContent className="pt-6">
               <div className="text-center py-8">
                 <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <h3 className="text-lg font-semibold text-muted-foreground mb-2 dark:text-gray-300">
+                <h3 className="text-lg font-semibold text-muted-foreground mb-2">
                   No Invoices Yet
                 </h3>
-                <p className="text-muted-foreground mb-4 dark:text-gray-400">
+                <p className="text-muted-foreground mb-4">
                   Create your first invoice for {client.name}
                 </p>
                 <Button
@@ -245,16 +245,16 @@ export function ClientDetails({ client, onCreateInvoice }) {
               return (
                 <Card
                   key={invoice.id}
-                  className="hover:shadow-md transition-shadow dark:bg-gray-800 dark:border-gray-700"
+                  className="hover:shadow-md transition-shadow"
                 >
                   <CardHeader>
                     <div className="flex items-center justify-between">
                       <div>
-                        <CardTitle className="text-lg dark:text-white">
+                        <CardTitle className="text-lg">
                           {invoiceData?.invoiceNumber ||
                             `Invoice #${invoice.id}`}
                         </CardTitle>
-                        <CardDescription className="flex items-center gap-4 mt-1 dark:text-gray-300">
+                        <CardDescription className="flex items-center gap-4 mt-1">
                           <span className="flex items-center gap-1">
                             <Calendar className="h-3 w-3" />
                             {formatDate(
@@ -281,8 +281,8 @@ export function ClientDetails({ client, onCreateInvoice }) {
 
                   {invoiceData?.items && invoiceData.items.length > 0 && (
                     <CardContent>
-                      <div className="text-sm text-muted-foreground dark:text-gray-400">
-                        <p className="font-medium mb-1 dark:text-gray-300">
+                      <div className="text-sm text-muted-foreground">
+                        <p className="font-medium mb-1">
                           Items:
                         </p>
                         <ul className="list-disc list-inside space-y-1">
@@ -293,7 +293,7 @@ export function ClientDetails({ client, onCreateInvoice }) {
                             </li>
                           ))}
                           {invoiceData.items.length > 3 && (
-                            <li className="text-muted-foreground dark:text-gray-500">
+                            <li className="text-muted-foreground">
                               +{invoiceData.items.length - 3} more items
                             </li>
                           )}

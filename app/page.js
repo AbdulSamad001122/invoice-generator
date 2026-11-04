@@ -2,11 +2,27 @@
 
 import { useState, useEffect } from "react";
 import { useUser } from "@clerk/nextjs";
-import { useClients } from "@/contexts/ClientContext";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  ArrowRight,
+  Building2,
+  CheckCircle2,
+  Circle,
+  FileText,
+  Layers,
+  Moon,
+  Palette,
+  Plus,
+  Users,
+} from "lucide-react";
+import { useClients } from "@/contexts/ClientContext";
+import { useToast } from "@/contexts/ToastContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { PageLoader } from "@/components/ui/spinner";
 import {
   Dialog,
   DialogContent,
@@ -14,19 +30,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Plus,
-  Users,
-  Sparkles,
-  TrendingUp,
-  Calendar,
-  FileText,
-  Building2,
-  X,
-} from "lucide-react";
-
 import {
   Card,
   CardContent,
@@ -35,386 +39,315 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import CompanyProfileForm from "@/components/company-profile-form";
-import axios from "axios";
+
+const getInitials = (name = "") =>
+  name
+    .split(" ")
+    .filter(Boolean)
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2) || "?";
+
+function Landing() {
+  const features = [
+    { icon: Users, title: "Clients in one place", text: "Keep every client and their invoice history organised." },
+    { icon: Layers, title: "Items & sub-items", text: "Break work into line items with their own prices." },
+    { icon: Palette, title: "Polished PDFs", text: "Four professional templates, ready to send." },
+    { icon: Moon, title: "Light & dark", text: "Comfortable to use any time of day." },
+  ];
+  return (
+    <div className="mx-auto flex max-w-3xl flex-col items-center py-12 text-center md:py-20">
+      <div className="mb-6 flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+        <FileText className="size-6" />
+      </div>
+      <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
+        Professional invoices in minutes
+      </h1>
+      <p className="mt-3 max-w-xl text-muted-foreground">
+        Manage clients, reuse saved items and send clean, branded PDF invoices.
+      </p>
+      <div className="mt-8 flex flex-wrap justify-center gap-3">
+        <Button size="lg" asChild>
+          <Link href="/signup">Create free account</Link>
+        </Button>
+        <Button size="lg" variant="outline" asChild>
+          <Link href="/signin">Sign in</Link>
+        </Button>
+      </div>
+      <div className="mt-14 grid w-full gap-4 text-left sm:grid-cols-2">
+        {features.map((f) => (
+          <div key={f.title} className="rounded-xl border bg-card p-4">
+            <f.icon className="mb-2 size-5 text-primary" />
+            <p className="font-medium">{f.title}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{f.text}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ChecklistItem({ done, title, description, action }) {
+  return (
+    <li className="flex items-start gap-3 py-3">
+      {done ? (
+        <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-success" />
+      ) : (
+        <Circle className="mt-0.5 size-5 shrink-0 text-muted-foreground/50" />
+      )}
+      <div className="min-w-0 flex-1">
+        <p className={`text-sm font-medium ${done ? "text-muted-foreground line-through" : ""}`}>
+          {title}
+        </p>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </div>
+      {!done && action}
+    </li>
+  );
+}
 
 export default function Home() {
   const { isLoaded, isSignedIn, user } = useUser();
-  const { addClient } = useClients();
+  const router = useRouter();
+  const { toast } = useToast();
+  const { clients, loading: clientsLoading, pagination, addClient } = useClients();
+
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [clientForm, setClientForm] = useState({ name: "", email: "" });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [hasCompanyProfile, setHasCompanyProfile] = useState(true);
-  const [showCompanyProfileBanner, setShowCompanyProfileBanner] = useState(false);
+  const [hasCompanyProfile, setHasCompanyProfile] = useState(null); // null = loading
   const [showCompanyProfileModal, setShowCompanyProfileModal] = useState(false);
-  const [companyProfileLoading, setCompanyProfileLoading] = useState(true);
 
   // Check company profile status
   useEffect(() => {
-    const checkCompanyProfile = async () => {
-      if (!isSignedIn) return;
-
+    if (!isLoaded || !isSignedIn) return;
+    let cancelled = false;
+    (async () => {
       try {
         const response = await fetch("/api/company-profile");
-        if (response.ok) {
-          const result = await response.json();
-          if (result.success) {
-            const hasProfile = result.data.hasCompanyProfile;
-            setHasCompanyProfile(hasProfile);
-            setShowCompanyProfileBanner(!hasProfile);
-          }
-        }
+        const result = response.ok ? await response.json() : null;
+        if (!cancelled) setHasCompanyProfile(Boolean(result?.success && result.data.hasCompanyProfile));
       } catch (error) {
         console.error("Error checking company profile:", error);
-      } finally {
-        setCompanyProfileLoading(false);
+        if (!cancelled) setHasCompanyProfile(false);
       }
+    })();
+    return () => {
+      cancelled = true;
     };
-
-    if (isLoaded && isSignedIn) {
-      checkCompanyProfile();
-    }
   }, [isLoaded, isSignedIn]);
 
-  // Show loading state while Clerk is loading
-  if (!isLoaded) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900"></div>
-      </div>
-    );
-  }
-
-  // Redirect to sign in if not authenticated
-  if (!isSignedIn) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="max-w-md w-full space-y-8 text-center">
-          <div>
-            <h2 className="mt-6 text-3xl font-extrabold text-gray-900">
-              Welcome to Invoice Generator
-            </h2>
-            <p className="mt-2 text-sm text-gray-600">
-              Please sign in to start creating professional invoices
-            </p>
-          </div>
-          <div className="mt-8 space-y-4">
-            <Button asChild className="w-full">
-              <Link href="/signin">Sign In</Link>
-            </Button>
-            <Button variant="outline" asChild className="w-full">
-              <Link href="/signup">Create Account</Link>
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (!isLoaded) return <PageLoader fullScreen />;
+  if (!isSignedIn) return <Landing />;
 
   const handleCreateClient = async (e) => {
     e.preventDefault();
-    if (!clientForm.name.trim()) return;
+    if (isSubmitting || !clientForm.name.trim()) return;
 
     setIsSubmitting(true);
     try {
       const newClient = await addClient({
-        name: clientForm.name,
-        email: clientForm.email || null,
+        name: clientForm.name.trim(),
+        email: clientForm.email.trim() || null,
       });
-
-      console.log("Created client:", newClient);
-
-      // Reset form and close dialog
       setClientForm({ name: "", email: "" });
       setIsDialogOpen(false);
+      toast.success("Client added");
+      if (newClient?.id) router.push(`/dashboard/${newClient.id}`);
     } catch (error) {
       console.error("Error creating client:", error);
-      // You might want to show an error message to the user here
+      toast.error(error?.response?.data?.error || "Couldn't add the client. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleInputChange = (field, value) => {
-    setClientForm((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleCompanyProfileSaved = (profileData) => {
-    setHasCompanyProfile(true);
-    setShowCompanyProfileBanner(false);
-    setShowCompanyProfileModal(false);
-  };
-
-  const handleDismissBanner = () => {
-    setShowCompanyProfileBanner(false);
-  };
+  const firstName = user.firstName || user.emailAddresses?.[0]?.emailAddress?.split("@")[0];
+  const clientCount = pagination.totalCount || clients.length;
+  const hasClients = clientCount > 0;
+  const setupDone = hasCompanyProfile === true && hasClients;
+  const stepsDone = [hasCompanyProfile === true, hasClients].filter(Boolean).length;
 
   return (
     <div className="space-y-8">
-          {/* Enhanced Header with Gradient Background */}
-          <div className="relative overflow-hidden rounded-lg bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-600 dark:from-blue-700 dark:via-purple-700 dark:to-indigo-700 p-8 text-white">
-            <div className="absolute inset-0 bg-black/20 dark:bg-black/40"></div>
-            <div className="relative z-10 flex justify-between items-center">
-              <div className="space-y-2">
-                <div className="flex items-center space-x-3">
-                  <Sparkles className="h-6 w-6" />
-                  <h1 className="text-4xl font-bold tracking-tight">
-                    Dashboard
-                  </h1>
-                </div>
-                <p className="text-blue-100 dark:text-blue-200 text-lg">
-                  Welcome back,{" "}
-                  {user.firstName || user.emailAddresses[0].emailAddress}!
-                </p>
-                <p className="text-blue-200 dark:text-blue-300 text-sm">
-                  Manage your clients and create professional invoices with
-                  ease.
-                </p>
-              </div>
-              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button
-                    size="lg"
-                    className="bg-white text-blue-600 hover:bg-blue-50 dark:bg-gray-100 dark:text-blue-700 dark:hover:bg-gray-200 shadow-lg"
-                  >
-                    <Plus className="mr-2 h-5 w-5" />
-                    Add Client
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-[500px] dark:bg-gray-800 dark:border-gray-700">
-                  <DialogHeader className="space-y-3">
-                    <DialogTitle className="text-2xl font-semibold flex items-center dark:text-white">
-                      <Users className="mr-2 h-6 w-6 text-blue-600 dark:text-blue-400" />
-                      Add New Client
-                    </DialogTitle>
-                    <DialogDescription className="text-base dark:text-gray-300">
-                      Create a new client to add to your invoice system. Fill in
-                      the details below.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <form onSubmit={handleCreateClient}>
-                    <div className="space-y-6 py-6">
-                      <div className="space-y-2">
-                        <Label
-                          htmlFor="name"
-                          className="text-sm font-medium dark:text-gray-200"
-                        >
-                          Client Name *
-                        </Label>
-                        <Input
-                          id="name"
-                          value={clientForm.name}
-                          onChange={(e) =>
-                            handleInputChange("name", e.target.value)
-                          }
-                          className="h-11"
-                          placeholder="Enter client's full name"
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="email" className="text-sm font-medium">
-                          Email Address
-                        </Label>
-                        <Input
-                          id="email"
-                          type="email"
-                          value={clientForm.email}
-                          onChange={(e) =>
-                            handleInputChange("email", e.target.value)
-                          }
-                          className="h-11"
-                          placeholder="client@example.com (optional)"
-                        />
-                      </div>
-                    </div>
-                    <DialogFooter className="space-x-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setIsDialogOpen(false)}
-                        disabled={isSubmitting}
-                        className="h-11"
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        type="submit"
-                        disabled={isSubmitting || !clientForm.name.trim()}
-                        className="h-11 bg-blue-600 hover:bg-blue-700"
-                      >
-                        {isSubmitting ? (
-                          <>
-                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                            Creating...
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="mr-2 h-4 w-4" />
-                            Create Client
-                          </>
-                        )}
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
-            </div>
-          </div>
+      {/* Page header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Welcome back{firstName ? `, ${firstName}` : ""}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Pick a client to create or manage their invoices.
+          </p>
+        </div>
+        <Button onClick={() => setIsDialogOpen(true)}>
+          <Plus /> Add client
+        </Button>
+      </div>
 
-          {/* Company Profile Setup Banner */}
-          {showCompanyProfileBanner && (
-            <div className="bg-gradient-to-r from-orange-500 to-red-500 dark:from-orange-600 dark:to-red-600 text-white p-4 rounded-lg shadow-lg">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <Building2 className="h-6 w-6" />
-                  <div>
-                    <h3 className="font-semibold text-lg">
-                      Complete Your Company Profile
-                    </h3>
-                    <p className="text-orange-100 dark:text-orange-200 text-sm">
-                      Add your company details to personalize your invoices and make them more professional.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Button
-                    onClick={() => setShowCompanyProfileModal(true)}
-                    variant="secondary"
-                    size="sm"
-                    className="bg-white text-orange-600 hover:bg-orange-50 dark:bg-gray-100 dark:text-orange-700 dark:hover:bg-gray-200"
-                  >
-                    Set Up Now
+      {/* Setup checklist (hidden once the basics are done) */}
+      {hasCompanyProfile !== null && !clientsLoading && !setupDone && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Get set up</CardTitle>
+            <CardDescription>
+              {stepsDone} of 2 done. Finish these to start sending invoices.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y">
+              <ChecklistItem
+                done={hasCompanyProfile === true}
+                title="Add your company details"
+                description="Your name, logo and bank details appear on every invoice."
+                action={
+                  <Button size="sm" variant="outline" onClick={() => setShowCompanyProfileModal(true)}>
+                    Set up
                   </Button>
-                  <Button
-                    onClick={handleDismissBanner}
-                    variant="ghost"
-                    size="sm"
-                    className="text-white hover:bg-white/20 p-1"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Company Profile Modal */}
-          <Dialog open={showCompanyProfileModal} onOpenChange={setShowCompanyProfileModal}>
-            <DialogContent className="sm:max-w-[600px] dark:bg-gray-800 dark:border-gray-700">
-              <DialogHeader>
-                <DialogTitle className="text-2xl font-semibold flex items-center dark:text-white">
-                  <Building2 className="mr-2 h-6 w-6 text-blue-600 dark:text-blue-400" />
-                  Company Profile Setup
-                </DialogTitle>
-                <DialogDescription className="text-base dark:text-gray-300">
-                  Add your company information to personalize your invoices.
-                </DialogDescription>
-              </DialogHeader>
-              <CompanyProfileForm
-                onSave={handleCompanyProfileSaved}
-                onCancel={() => setShowCompanyProfileModal(false)}
+                }
               />
-            </DialogContent>
-          </Dialog>
+              <ChecklistItem
+                done={hasClients}
+                title="Add your first client"
+                description="Then open the client to create their first invoice."
+                action={
+                  <Button size="sm" variant="outline" onClick={() => setIsDialogOpen(true)}>
+                    Add client
+                  </Button>
+                }
+              />
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
-          {/* Welcome Cards Section */}
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-green-50 to-emerald-100 dark:from-green-900/20 dark:to-emerald-900/20 dark:bg-gray-800 hover:shadow-xl transition-shadow">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-green-800 dark:text-green-300">
-                  Quick Start
-                </CardTitle>
-                <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-green-900 dark:text-green-100">
-                  Get Started
-                </div>
-                <p className="text-xs text-green-700 dark:text-green-400 mt-1">
-                  Add your first client to begin creating invoices
-                </p>
-              </CardContent>
-            </Card>
+      {/* Clients */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium text-muted-foreground">
+            Clients{hasClients ? ` (${clientCount})` : ""}
+          </h2>
+          {hasCompanyProfile === true && (
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/company-setup">
+                <Building2 /> Company profile
+              </Link>
+            </Button>
+          )}
+        </div>
 
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-cyan-100 dark:from-blue-900/20 dark:to-cyan-900/20 dark:bg-gray-800 hover:shadow-xl transition-shadow">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-blue-800 dark:text-blue-300">
-                  Client Management
-                </CardTitle>
-                <Users className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-blue-900 dark:text-blue-100">
-                  Organize
-                </div>
-                <p className="text-xs text-blue-700 dark:text-blue-400 mt-1">
-                  Manage all your clients in one place
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-violet-100 dark:from-purple-900/20 dark:to-violet-900/20 dark:bg-gray-800 hover:shadow-xl transition-shadow">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-purple-800 dark:text-purple-300">
-                  Professional Invoices
-                </CardTitle>
-                <FileText className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-purple-900 dark:text-purple-100">
-                  Create
-                </div>
-                <p className="text-xs text-purple-700 dark:text-purple-400 mt-1">
-                  Generate beautiful, professional invoices
-                </p>
-              </CardContent>
-            </Card>
+        {clientsLoading ? (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-[72px] rounded-xl" />
+            ))}
           </div>
+        ) : !hasClients ? (
+          <div className="flex flex-col items-center rounded-xl border border-dashed px-6 py-12 text-center">
+            <Users className="mb-3 size-8 text-muted-foreground" />
+            <p className="font-medium">No clients yet</p>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+              Add a client to start creating invoices for them.
+            </p>
+            <Button className="mt-4" onClick={() => setIsDialogOpen(true)}>
+              <Plus /> Add client
+            </Button>
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {clients.map((client) => (
+              <Link
+                key={client.id}
+                href={`/dashboard/${client.id}`}
+                className="group flex items-center gap-3 rounded-xl border bg-card p-4 transition-colors hover:border-ring/50 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
+                  {getInitials(client.name)}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{client.name}</span>
+                  <span className="block truncate text-sm text-muted-foreground">
+                    {client.email || "No email"}
+                  </span>
+                </span>
+                <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
 
-          {/* Getting Started Section */}
-          <Card className="border-0 shadow-lg dark:bg-gray-800 dark:border-gray-700">
-            <CardHeader>
-              <CardTitle className="text-xl font-semibold flex items-center dark:text-white">
-                <Sparkles className="mr-2 h-5 w-5 text-yellow-500 dark:text-yellow-400" />
-                Getting Started
-              </CardTitle>
-              <CardDescription className="text-base">
-                Follow these simple steps to set up your invoice system
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="flex items-start space-x-3 p-4 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors">
-                  <div className="flex-shrink-0 w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-semibold">
-                    1
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-gray-900">
-                      Add Your First Client
-                    </h4>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Click the &quot;Add Client&quot; button to add your first
-                      client with their contact information.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-start space-x-3 p-4 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors">
-                  <div className="flex-shrink-0 w-8 h-8 bg-green-600 text-white rounded-full flex items-center justify-center text-sm font-semibold">
-                    2
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-gray-900">
-                      Create Your Invoice
-                    </h4>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Select a client from the sidebar and create professional
-                      invoices with ease.
-                    </p>
-                  </div>
-                </div>
+      {/* Add client dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={(open) => !isSubmitting && setIsDialogOpen(open)}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>Add client</DialogTitle>
+            <DialogDescription>
+              Add someone you bill so you can create invoices for them.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleCreateClient}>
+            <fieldset disabled={isSubmitting} className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">Name</Label>
+                <Input
+                  id="name"
+                  value={clientForm.name}
+                  onChange={(e) => setClientForm((p) => ({ ...p, name: e.target.value }))}
+                  placeholder="Acme Inc."
+                  autoFocus
+                  required
+                />
               </div>
-            </CardContent>
-          </Card>
+              <div className="space-y-2">
+                <Label htmlFor="email">
+                  Email <span className="font-normal text-muted-foreground">(optional)</span>
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={clientForm.email}
+                  onChange={(e) => setClientForm((p) => ({ ...p, email: e.target.value }))}
+                  placeholder="billing@acme.com"
+                />
+              </div>
+            </fieldset>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsDialogOpen(false)}
+                disabled={isSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" loading={isSubmitting} disabled={!clientForm.name.trim()}>
+                {isSubmitting ? "Adding…" : "Add client"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Company profile dialog */}
+      <Dialog open={showCompanyProfileModal} onOpenChange={setShowCompanyProfileModal}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>Company profile</DialogTitle>
+            <DialogDescription>
+              These details appear on your invoices.
+            </DialogDescription>
+          </DialogHeader>
+          <CompanyProfileForm
+            onSave={() => {
+              setHasCompanyProfile(true);
+              setShowCompanyProfileModal(false);
+            }}
+            onClose={() => setShowCompanyProfileModal(false)}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

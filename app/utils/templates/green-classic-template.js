@@ -5,6 +5,7 @@ import {
   subItemPdfStyles as subStyles,
   SUB_ITEM_BULLET,
 } from "../invoiceItems";
+import { normalizePaymentUrl, getPaymentLinkText, displayUrl } from "../paymentLink";
 import {
   Document,
   Page,
@@ -12,6 +13,7 @@ import {
   View,
   StyleSheet,
   Image,
+  Link,
 } from "@react-pdf/renderer";
 
 // Create styles for Green Classic Template (based on the provided image)
@@ -409,6 +411,16 @@ const GreenClassicTemplate = ({ invoiceData }) => {
     includeDescription = false,
   } = invoiceData;
 
+  // Quantity can be hidden for the whole invoice: then Qty/Price columns are hidden
+  // and the item/description columns take their space.
+  const showQuantity = invoiceData.includeQuantity !== false;
+  const growCol = showQuantity ? {} : { width: "auto", flexGrow: 1, flexBasis: 0 };
+
+  // Optional payment link
+  const paymentUrl = normalizePaymentUrl(invoiceData.paymentLink);
+  const paymentLinkText = getPaymentLinkText(invoiceData.paymentLinkText);
+  const hasCustomLinkText = Boolean(String(invoiceData.paymentLinkText || "").trim());
+
   // Calculate totals
   const subtotal = calculateItemsSubtotal(items);
   const taxAmount = (subtotal * (taxRate || 0)) / 100;
@@ -527,34 +539,38 @@ const GreenClassicTemplate = ({ invoiceData }) => {
                 styles.tableHeaderCell,
                 includeDescription
                   ? styles.itemNameHeader
-                  : styles.itemNameHeaderWide,
+                  : styles.itemNameHeaderWide, growCol,
               ]}
             >
               Item Name
             </Text>
             {includeDescription && (
-              <Text style={[styles.tableHeaderCell, styles.descriptionHeader]}>
+              <Text style={[styles.tableHeaderCell, styles.descriptionHeader, growCol]}>
                 Description
               </Text>
             )}
-            <Text
-              style={[
-                styles.tableHeaderCell,
-                includeDescription ? styles.qtyHeader : styles.qtyHeaderWide,
-              ]}
-            >
-              Quantity
-            </Text>
-            <Text
-              style={[
-                styles.tableHeaderCell,
-                includeDescription
-                  ? styles.priceHeader
-                  : styles.priceHeaderWide,
-              ]}
-            >
-              Price
-            </Text>
+            {showQuantity && (
+              <Text
+                style={[
+                  styles.tableHeaderCell,
+                  includeDescription ? styles.qtyHeader : styles.qtyHeaderWide,
+                ]}
+              >
+                Quantity
+              </Text>
+            )}
+            {showQuantity && (
+              <Text
+                style={[
+                  styles.tableHeaderCell,
+                  includeDescription
+                    ? styles.priceHeader
+                    : styles.priceHeaderWide,
+                ]}
+              >
+                Price
+              </Text>
+            )}
             <Text
               style={[
                 styles.tableHeaderCell,
@@ -587,7 +603,7 @@ const GreenClassicTemplate = ({ invoiceData }) => {
                   styles.tableCell,
                   includeDescription
                     ? styles.itemNameCell
-                    : styles.itemNameCellWide,
+                    : styles.itemNameCellWide, growCol,
                   isGroup ? subStyles.groupName : {},
                   isSub ? subStyles.subName : {},
                 ]}
@@ -596,28 +612,32 @@ const GreenClassicTemplate = ({ invoiceData }) => {
                 {item.itemName || "Item Name"}
               </Text>
               {includeDescription && (
-                <Text style={[styles.tableCell, styles.descriptionCell, subCell || {}]}>
+                <Text style={[styles.tableCell, styles.descriptionCell, growCol, subCell || {}]}>
                   {item.description || ""}
                 </Text>
               )}
-              <Text
-                style={[
-                  styles.tableCell,
-                  includeDescription ? styles.qtyCell : styles.qtyCellWide,
-                  subCell || {},
-                ]}
-              >
-                {isGroup ? "" : item.quantity || 1}
-              </Text>
-              <Text
-                style={[
-                  styles.tableCell,
-                  includeDescription ? styles.priceCell : styles.priceCellWide,
-                  subCell || {},
-                ]}
-              >
-                {isGroup ? "" : formatCurrency(item.rate)}
-              </Text>
+              {showQuantity && (
+                <Text
+                  style={[
+                    styles.tableCell,
+                    includeDescription ? styles.qtyCell : styles.qtyCellWide,
+                    subCell || {},
+                  ]}
+                >
+                  {isGroup ? "" : item.quantity || 1}
+                </Text>
+              )}
+              {showQuantity && (
+                <Text
+                  style={[
+                    styles.tableCell,
+                    includeDescription ? styles.priceCell : styles.priceCellWide,
+                    subCell || {},
+                  ]}
+                >
+                  {isGroup ? "" : formatCurrency(item.rate)}
+                </Text>
+              )}
               <Text
                 style={[
                   styles.tableCell,
@@ -668,7 +688,7 @@ const GreenClassicTemplate = ({ invoiceData }) => {
         </View>
 
         {/* Footer Section */}
-        {(terms || notes || bankName || bankAccount) && (
+        {(terms || notes || bankName || bankAccount || paymentUrl) && (
           <View style={styles.footerSection}>
             {(terms || notes) && (
               <View style={styles.termsSection}>
@@ -693,7 +713,7 @@ const GreenClassicTemplate = ({ invoiceData }) => {
                 )}
               </View>
             )}
-            {(bankName || bankAccount) && (
+            {(bankName || bankAccount || paymentUrl) && (
               <View style={styles.paymentSection}>
                 <Text style={styles.footerTitle}>Payment Method :</Text>
                 {bankAccount && (
@@ -703,6 +723,32 @@ const GreenClassicTemplate = ({ invoiceData }) => {
                 )}
                 {bankName && (
                   <Text style={styles.footerText}>A/C Name : {bankName}</Text>
+                )}
+                {paymentUrl && (
+                  <View style={{ marginTop: 6 }}>
+                    <Link
+                      src={paymentUrl}
+                      style={[
+                        styles.footerText,
+                        {
+                          color: "#4D7C0F",
+                          textDecoration: "underline",
+                          fontFamily: "Helvetica-Bold",
+                        },
+                      ]}
+                    >
+                      {paymentLinkText} »
+                    </Link>
+                    {/* Show the raw URL only when no custom link text was given */}
+                    {!hasCustomLinkText && (
+                      <Link
+                        src={paymentUrl}
+                        style={[styles.footerText, { color: "#6B7280", fontSize: 8, textDecoration: "none" }]}
+                      >
+                        {displayUrl(paymentUrl)}
+                      </Link>
+                    )}
+                  </View>
                 )}
               </View>
             )}

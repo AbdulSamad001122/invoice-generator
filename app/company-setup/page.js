@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import CompanyProfileForm from "@/components/company-profile-form";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
+import { PageLoader } from "@/components/ui/spinner";
 
 
 export default function CompanySetupPage() {
@@ -62,37 +63,24 @@ export default function CompanySetupPage() {
     router.push("/");
   };
 
-  // Show loading state while checking authentication and profile
-  if (!isLoaded || loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
-
-  // Redirect to signin if not authenticated
-  if (!isSignedIn) {
-    return null;
+  if (!isLoaded || loading || !isSignedIn) {
+    return <PageLoader fullScreen label="Loading your profile…" />;
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
-      {/* Header */}
-      <div className="text-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          {hasCompanyProfile ? "Edit Company Information" : "Welcome to Invoice Generator!"}
+    <div className="mx-auto max-w-2xl space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {hasCompanyProfile ? "Company profile" : "Set up your company"}
         </h1>
-        <p className="text-gray-600">
-          {hasCompanyProfile 
-            ? "Update your company profile information below."
-            : "Let's set up your company profile to get started with creating professional invoices."
-          }
+        <p className="text-sm text-muted-foreground">
+          {hasCompanyProfile
+            ? "These details appear on every invoice you create."
+            : "Add your business details once and they'll be filled in on every invoice."}
         </p>
       </div>
 
-      {/* Company Profile Form */}
-      <div className="bg-white rounded-lg shadow-sm border p-6">
+      <div className="rounded-xl border bg-card p-6">
         <CompanyProfileForm
           onSave={handleProfileSaved}
           isModal={false}
@@ -100,33 +88,16 @@ export default function CompanySetupPage() {
         />
       </div>
 
-      {/* Skip Option - Only show for new users */}
       {!hasCompanyProfile && (
-        <div className="mt-6 text-center">
-          <Button
-            variant="ghost"
-            onClick={handleSkip}
-            className="text-gray-500 hover:text-gray-700"
-          >
+        <div className="text-center">
+          <Button variant="ghost" onClick={handleSkip} className="text-muted-foreground">
             Skip for now
           </Button>
-          <p className="text-xs text-gray-400 mt-2">
-            You can set this up later in your account settings
+          <p className="mt-1 text-xs text-muted-foreground">
+            You can do this later from Company profile in the sidebar.
           </p>
         </div>
       )}
-
-      {/* Back to Dashboard */}
-      <div className="mt-8 text-center">
-        <Button
-          variant="outline"
-          onClick={() => router.push("/")}
-          className="inline-flex items-center"
-        >
-          <ArrowLeft className="w-4 h-4 mr-2" />
-          Go to Dashboard
-        </Button>
-      </div>
     </div>
   );
 }
