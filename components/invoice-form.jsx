@@ -860,8 +860,9 @@ export default function InvoiceForm({
                     <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="PAID">Paid</SelectItem>
                     <SelectItem value="PENDING">Pending</SelectItem>
+                    <SelectItem value="PAID">Paid</SelectItem>
+                    <SelectItem value="OVERDUE">Overdue</SelectItem>
                     <SelectItem value="CANCELLED">Cancelled</SelectItem>
                   </SelectContent>
                 </Select>
@@ -974,10 +975,15 @@ export default function InvoiceForm({
                         ref={logoInputRef}
                         id="companyLogo"
                         type="file"
-                        accept="image/*"
+                        accept="image/png,image/jpeg"
                         className="sr-only"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
+                          if (file && !["image/png", "image/jpeg"].includes(file.type)) {
+                            toast.error("Please choose a PNG or JPG image (PDFs can't show other formats).");
+                            e.target.value = "";
+                            return;
+                          }
                           if (file) {
                             const reader = new FileReader();
                             reader.onload = (event) => {
@@ -1022,7 +1028,7 @@ export default function InvoiceForm({
                             </Button>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground">PNG, JPG or SVG. Square works best.</p>
+                        <p className="text-xs text-muted-foreground">PNG or JPG. Square works best.</p>
                       </div>
                     </div>
                   )}

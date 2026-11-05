@@ -434,10 +434,24 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
                   })
                 )}
 
-                {loadingMore && (
+                {loadingMore ? (
                   <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
                     <Spinner className="size-4" /> Loading more…
                   </div>
+                ) : (
+                  // Scrolling also loads more, but a short list never scrolls
+                  pagination.hasMore && !loading && (
+                    <div className="px-2 py-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full text-muted-foreground"
+                        onClick={loadMoreClients}
+                      >
+                        Show more clients
+                      </Button>
+                    </div>
+                  )
                 )}
               </SidebarMenu>
             </div>

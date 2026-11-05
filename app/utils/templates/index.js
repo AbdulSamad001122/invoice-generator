@@ -6,6 +6,11 @@ import BlueModernTemplate from "./blue-modern-template";
 import YellowClassicTemplate from "./yellow-classic-template";
 import GreenModernTemplate from "./green-modern-template";
 import GreenClassicTemplate from "./green-classic-template";
+import { Font } from "@react-pdf/renderer";
+
+// Never hyphenate words in PDFs: react-pdf otherwise inserts "-" when wrapping,
+// which corrupts printed links/URLs and long names. Words wrap whole instead.
+Font.registerHyphenationCallback((word) => [word]);
 
 // Template registry - add new templates here (metadata lives in ./registry.js)
 import {

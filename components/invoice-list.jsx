@@ -610,7 +610,7 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
               </TableBody>
             </Table>
 
-            {clientPagination.hasMore && !hasFilters && (
+            {clientPagination.hasMore && (
               <div className="flex justify-center py-3">
                 <Button
                   variant="outline"

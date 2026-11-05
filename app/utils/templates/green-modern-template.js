@@ -390,7 +390,12 @@ const GreenModernTemplate = ({ invoiceData }) => {
   // Quantity can be hidden for the whole invoice: then Qty/Price columns are hidden
   // and the item/description columns take their space.
   const showQuantity = invoiceData.includeQuantity !== false;
-  const growCol = showQuantity ? {} : { width: "auto", flexGrow: 1, flexBasis: 0 };
+  // Fixed widths (not flex) so the sub-item indent can't shift the description column.
+  // The Total column keeps its width; name (and description) share the rest.
+  const totalColWidth = invoiceData.includeDescription ? 17.5 : 16.66;
+  const growCol = showQuantity
+    ? {}
+    : { width: `${(100 - totalColWidth) / (invoiceData.includeDescription ? 2 : 1)}%` };
 
   // Optional payment link
   const paymentUrl = normalizePaymentUrl(invoiceData.paymentLink);
@@ -695,7 +700,7 @@ const GreenModernTemplate = ({ invoiceData }) => {
                 </Text>
               )}
               {paymentUrl && (
-                <View style={{ marginTop: 6 }}>
+                <View style={{ marginTop: 6, alignItems: "flex-end" }}>
                   <Link
                     src={paymentUrl}
                     style={[

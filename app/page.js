@@ -111,7 +111,7 @@ export default function Home() {
   const { isLoaded, isSignedIn, user } = useUser();
   const router = useRouter();
   const { toast } = useToast();
-  const { clients, loading: clientsLoading, pagination, addClient } = useClients();
+  const { clients, loading: clientsLoading, loadingMore, pagination, addClient, loadMoreClients } = useClients();
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [clientForm, setClientForm] = useState({ name: "", email: "" });
@@ -274,6 +274,14 @@ export default function Home() {
                 <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
               </Link>
             ))}
+          </div>
+        )}
+
+        {!clientsLoading && pagination.hasMore && (
+          <div className="flex justify-center pt-1">
+            <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMoreClients}>
+              {loadingMore ? "Loading…" : "Show more clients"}
+            </Button>
           </div>
         )}
       </section>

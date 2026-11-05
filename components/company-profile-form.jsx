@@ -16,11 +16,13 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { X, Upload, Building2, ImageIcon, Trash2 } from "lucide-react";
 import { useAuth } from "@clerk/nextjs";
 import { useToast } from "@/contexts/ToastContext";
+import { useInvoices } from "@/contexts/InvoiceContext";
 import { Spinner } from "@/components/ui/spinner";
 
 export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = true, initialData = null }) {
   const { userId } = useAuth();
   const { toast } = useToast();
+  const { invalidateAllInvoices } = useInvoices();
   const fileInputRef = useRef(null);
   const [formData, setFormData] = useState({
     companyName: "",
@@ -99,8 +101,9 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
     const file = event.target.files[0];
     if (file) {
       // Validate file type
-      if (!file.type.startsWith('image/')) {
-        setErrors(prev => ({ ...prev, companyLogo: 'Please select a valid image file' }));
+      // PDF templates can only draw PNG and JPEG images
+      if (!['image/png', 'image/jpeg'].includes(file.type)) {
+        setErrors(prev => ({ ...prev, companyLogo: 'Please choose a PNG or JPG image' }));
         return;
       }
       
@@ -217,6 +220,8 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
       const result = await response.json();
 
       if (response.ok && result.success) {
+        // Existing invoices were rewritten on the server, so cached lists are stale
+        if (updateOption === "allInvoices") invalidateAllInvoices();
         // Show success message with invoice update info if applicable
         if (result.data?.updatedInvoicesCount > 0) {
           // Show a user-friendly success message without console warnings
@@ -303,7 +308,7 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/png,image/jpeg"
               onChange={handleFileSelect}
               className="hidden"
               id="logoFileInput"
@@ -354,7 +359,7 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
             <p className="text-sm text-destructive">{errors.companyLogo}</p>
           )}
           <p className="text-sm text-muted-foreground">
-            PNG, JPG or GIF, up to 5 MB. Square images work best.
+            PNG or JPG, up to 5 MB. Square images work best.
           </p>
         </div>
 

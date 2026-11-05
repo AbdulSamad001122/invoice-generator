@@ -27,7 +27,10 @@ export function getPaymentLinkText(text) {
   return t || DEFAULT_PAYMENT_LINK_TEXT;
 }
 
-// Short form of the URL for printing under the link (no scheme, no trailing slash)
-export function displayUrl(url) {
-  return String(url || "").replace(/^https?:\/\//i, "").replace(/\/$/, "");
+// Short form of the URL for printing under the link (no scheme, no trailing slash).
+// Long URLs are shortened with "…" so they never run off the page; the full URL
+// is still the link target.
+export function displayUrl(url, maxLength = 48) {
+  const short = String(url || "").replace(/^https?:\/\//i, "").replace(/\/$/, "");
+  return short.length > maxLength ? `${short.slice(0, maxLength - 1)}…` : short;
 }
