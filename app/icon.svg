@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Invoice Generator">
+  <!-- Brand tile: same near-black as the app's primary color -->
+  <rect width="64" height="64" rx="14" fill="#171717"/>
+  <!-- Invoice sheet with a folded corner -->
+  <path d="M21 12h15.5L46 21.5V48a4 4 0 0 1-4 4H21a4 4 0 0 1-4-4V16a4 4 0 0 1 4-4z" fill="#fafafa"/>
+  <path d="M36.5 12v6.5a3 3 0 0 0 3 3H46z" fill="#a3a3a3"/>
+  <!-- Line items -->
+  <rect x="22" y="26" width="13" height="3" rx="1.5" fill="#a3a3a3"/>
+  <rect x="22" y="32" width="19" height="3" rx="1.5" fill="#a3a3a3"/>
+  <!-- Total -->
+  <rect x="22" y="41" width="19" height="4" rx="2" fill="#171717"/>
+</svg>
