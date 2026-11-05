@@ -65,19 +65,11 @@ import {
   calculateItemsSubtotal,
   prepareItemsForPDF,
 } from "@/app/utils/invoiceItems";
-import { useInvoices } from "@/contexts/InvoiceContext";
+import { useInvoices, useClientInvoices } from "@/contexts/InvoiceContext";
 import { Spinner } from "@/components/ui/spinner";
 
 export default function InvoiceList({ clientId, onEditInvoice }) {
   const {
-    getInvoicesForClient,
-    loading,
-    loadingMore,
-    searchLoading,
-    pagination,
-    error,
-    fetchInvoices,
-    loadMoreInvoices,
     deleteInvoice,
     deleteAllInvoices,
     updateInvoiceStatus,
@@ -88,6 +80,7 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [searchDate, setSearchDate] = useState("");
   const [searchStatus, setSearchStatus] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [invoiceToDelete, setInvoiceToDelete] = useState(null);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
@@ -95,54 +88,43 @@ export default function InvoiceList({ clientId, onEditInvoice }) {
   const [busyInvoiceId, setBusyInvoiceId] = useState(null);
   const { toast } = useToast();
 
-  // Get invoices from context
-  const rawInvoices = getInvoicesForClient(clientId);
-  const invoices = useMemo(() => rawInvoices, [rawInvoices]);
-  const isLoading = loading[clientId] || false;
-  const isLoadingMore = loadingMore[clientId] || false;
-  const isSearchLoading = searchLoading[clientId] || false;
-  const fetchError = error[clientId] || null;
-  const clientPagination = pagination[clientId] || { hasMore: false };
-
-  // Load invoices when the client changes (uses the 2-minute cache if fresh)
+  // Wait until typing pauses before searching (date/status apply immediately)
   useEffect(() => {
-    if (clientId) {
-      fetchInvoices(clientId);
-    }
-  }, [clientId, fetchInvoices]);
+    const id = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+    return () => clearTimeout(id);
+  }, [searchTerm]);
 
-  // Remember which search was last sent so the debounce below only
-  // fires when the user actually changes a filter
-  const lastSearchKeyRef = useRef(null);
-
-  // Debounced search effect to prevent excessive API calls
+  // Start each client with no filters
   useEffect(() => {
-    if (!clientId) return;
+    setSearchTerm("");
+    setDebouncedSearch("");
+    setSearchDate("");
+    setSearchStatus("");
+  }, [clientId]);
 
-    const searchKey = `${clientId}|${searchTerm}|${searchDate}|${searchStatus}`;
-    const isEmptySearch = !searchTerm && !searchDate && !searchStatus;
-    if (lastSearchKeyRef.current === null || lastSearchKeyRef.current.split("|")[0] !== clientId) {
-      // First render for this client: the effect above already loads the list
-      lastSearchKeyRef.current = searchKey;
-      if (isEmptySearch) return;
-    }
-    if (lastSearchKeyRef.current === searchKey && isEmptySearch) return;
+  // Cached per client + filters: revisiting a client shows its invoices instantly
+  const {
+    invoices,
+    totalCount,
+    isLoading,
+    isFetching,
+    isLoadingMore,
+    hasMore,
+    loadMore,
+    error: queryError,
+    refetch,
+  } = useClientInvoices(clientId, {
+    search: debouncedSearch,
+    date: searchDate,
+    status: searchStatus,
+  });
 
-    const timeoutId = setTimeout(() => {
-      lastSearchKeyRef.current = searchKey;
-      const searchParams = {
-        search: searchTerm,
-        date: searchDate,
-        status: searchStatus
-      };
-      
-      fetchInvoices(clientId, false, true, searchParams); // Reset pagination for search
-    }, 300); // 300ms debounce
+  const isSearchLoading = isFetching && Boolean(debouncedSearch || searchDate || searchStatus);
+  const fetchError = queryError ? queryError.message || "Failed to load invoices" : null;
+  const clientPagination = { hasMore, totalCount };
+  const fetchInvoices = () => refetch();
+  const loadMoreInvoices = () => loadMore();
 
-    return () => clearTimeout(timeoutId);
-  }, [clientId, searchTerm, searchDate, searchStatus, fetchInvoices]);
-
-  // Use invoices directly since filtering is now done server-side
   const filteredInvoices = invoices;
 
   const clearSearch = () => {

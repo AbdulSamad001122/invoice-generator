@@ -1,6 +1,7 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { QueryProvider } from "@/components/query-provider";
 import { ClientProvider } from "@/contexts/ClientContext";
 import { ItemProvider } from "@/contexts/ItemContext";
 import { InvoiceProvider } from "@/contexts/InvoiceContext";
@@ -55,6 +56,7 @@ export default function RootLayout({ children }) {
         <body
           className={`${geistSans.variable} ${geistMono.variable} antialiased`}
         >
+          <QueryProvider>
           <ThemeProvider>
             <ToastProvider>
               <ClientProvider>
@@ -77,6 +79,7 @@ export default function RootLayout({ children }) {
               </ClientProvider>
             </ToastProvider>
           </ThemeProvider>
+          </QueryProvider>
         </body>
       </html>
     </ClerkProvider>

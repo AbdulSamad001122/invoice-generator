@@ -1,10 +1,17 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+// Clients, cached with TanStack Query. The useClients() API is unchanged, so
+// components keep working; the cache now handles freshness, de-duplication
+// and background refreshes.
+
+import React, { createContext, useCallback, useContext, useMemo } from "react";
 import axios from "axios";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@clerk/nextjs";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
 
 const ClientContext = createContext();
+const PAGE_SIZE = 15;
 
 export function useClients() {
   const context = useContext(ClientContext);
@@ -14,193 +21,138 @@ export function useClients() {
   return context;
 }
 
+// Apply a change to every page of the cached infinite client list
+function updateClientPages(data, updatePage) {
+  if (!data) return data;
+  return { ...data, pages: data.pages.map(updatePage) };
+}
+
 export function ClientProvider({ children }) {
-  const { user, isLoaded } = useUser();
-  const [clients, setClients] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState(null);
-  const [lastFetch, setLastFetch] = useState(null);
-  const [pagination, setPagination] = useState({
-    page: 1,
-    limit: 15,
-    totalCount: 0,
-    totalPages: 0,
-    hasMore: false,
+  const { isLoaded, userId } = useAuth();
+  const queryClient = useQueryClient();
+
+  const query = useInfiniteQuery({
+    queryKey: queryKeys.clients,
+    enabled: isLoaded && Boolean(userId),
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      const res = await axios.get(`/api/clients?page=${pageParam}&limit=${PAGE_SIZE}`);
+      return res.data; // { clients, pagination }
+    },
+    getNextPageParam: (lastPage) =>
+      lastPage?.pagination?.hasMore ? lastPage.pagination.page + 1 : undefined,
+    staleTime: 5 * 60 * 1000, // client list changes rarely
   });
 
-  // Cache duration: 5 minutes
-  const CACHE_DURATION = 5 * 60 * 1000;
-
-  // Refs mirror state so callbacks read the latest values synchronously
-  // (reading state through setState updaters is unreliable in React 18+).
-  const userId = user?.id;
-  const paginationRef = useRef(pagination);
-  const loadingMoreRef = useRef(false);
-  useEffect(() => { paginationRef.current = pagination; }, [pagination]);
-
-  const fetchClients = useCallback(async (force = false, reset = false) => {
-    if (!isLoaded || !user) return;
-
-    // Check cache validity for initial load
-    const now = Date.now();
-    if (!force && !reset && lastFetch && (now - lastFetch) < CACHE_DURATION && clients.length > 0) {
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const isInitialLoad = reset || clients.length === 0;
-      if (isInitialLoad) {
-        setLoading(true);
-        setPagination(prev => ({ ...prev, page: 1 }));
+  const pages = query.data?.pages;
+  const clients = useMemo(() => {
+    // Flatten pages and drop duplicates (a client added locally may also arrive on a later page)
+    const seen = new Set();
+    const list = [];
+    for (const page of pages || []) {
+      for (const client of page.clients || []) {
+        if (!seen.has(client.id)) {
+          seen.add(client.id);
+          list.push(client);
+        }
       }
-      
-      setError(null);
-      const page = reset ? 1 : pagination.page;
-      const response = await axios.get(`/api/clients?page=${page}&limit=${pagination.limit}`);
-      
-      if (reset || isInitialLoad) {
-        setClients(response.data.clients);
-      } else {
-        setClients(prev => [...prev, ...response.data.clients]);
-      }
-      
-      setPagination({
-        page: response.data.pagination.page,
-        limit: response.data.pagination.limit,
-        totalCount: response.data.pagination.totalCount,
-        totalPages: response.data.pagination.totalPages,
-        hasMore: response.data.pagination.hasMore,
-      });
-      
-      setLastFetch(now);
-    } catch (err) {
-      console.error('Error fetching clients:', err);
-      setError('Failed to fetch clients');
-    } finally {
-      setLoading(false);
     }
-  }, [isLoaded, user, lastFetch, CACHE_DURATION]);
+    return list;
+  }, [pages]);
 
-  const loadMoreClients = useCallback(async () => {
-    const currentPagination = paginationRef.current;
-    if (!currentPagination.hasMore || loadingMoreRef.current) return;
-
-    try {
-      loadingMoreRef.current = true;
-      setLoadingMore(true);
-      setError(null);
-      const nextPage = currentPagination.page + 1;
-      const response = await axios.get(`/api/clients?page=${nextPage}&limit=${currentPagination.limit}`);
-      
-      setClients(prev => [...prev, ...response.data.clients]);
-      setPagination({
-        page: response.data.pagination.page,
-        limit: response.data.pagination.limit,
-        totalCount: response.data.pagination.totalCount,
-        totalPages: response.data.pagination.totalPages,
-        hasMore: response.data.pagination.hasMore,
-      });
-    } catch (err) {
-      console.error('Error loading more clients:', err);
-      setError('Failed to load more clients');
-    } finally {
-      loadingMoreRef.current = false;
-      setLoadingMore(false);
-    }
-  }, []);
-
-  const addClient = async (clientData) => {
-    try {
-      const response = await axios.post("/api/clients", clientData);
-      const newClient = response.data;
-
-      // Optimistically update the client list
-      // Newest first, matching the server order; keep the total in sync
-      setClients((prev) => [newClient, ...prev.filter((c) => c.id !== newClient.id)]);
-      setPagination((prev) => ({ ...prev, totalCount: (prev.totalCount || 0) + 1 }));
-      setLastFetch(Date.now());
-
-      return newClient;
-    } catch (err) {
-      console.error("Error adding client:", err);
-      throw err;
-    }
+  const firstPagination = pages?.[0]?.pagination;
+  const lastPagination = pages?.[pages.length - 1]?.pagination;
+  const pagination = {
+    page: lastPagination?.page || 1,
+    limit: PAGE_SIZE,
+    totalCount: firstPagination?.totalCount ?? clients.length,
+    totalPages: lastPagination?.totalPages || 0,
+    hasMore: Boolean(query.hasNextPage),
   };
 
-  const updateClient = async (
-    clientId,
-    clientData,
-    updateOption = "fromNow"
-  ) => {
-    try {
-      const response = await axios.put("/api/clients", {
-        id: clientId,
-        ...clientData,
-        updateOption,
-      });
-      const updatedClient = response.data;
+  const setTotal = useCallback((delta) => {
+    queryClient.setQueryData(queryKeys.clients, (data) =>
+      updateClientPages(data, (page, i) =>
+        i === 0 && page.pagination
+          ? { ...page, pagination: { ...page.pagination, totalCount: Math.max(0, (page.pagination.totalCount || 0) + delta) } }
+          : page
+      )
+    );
+  }, [queryClient]);
 
-      // Optimistically update the client list
-      setClients((prev) =>
-        prev.map((client) => (client.id === clientId ? updatedClient : client))
-      );
-      setLastFetch(Date.now());
+  const addClient = useCallback(async (clientData) => {
+    const response = await axios.post("/api/clients", clientData);
+    const newClient = response.data;
+    // Newest first, matching the server order
+    queryClient.setQueryData(queryKeys.clients, (data) =>
+      updateClientPages(data, (page, i) =>
+        i === 0 ? { ...page, clients: [newClient, ...(page.clients || []).filter((c) => c.id !== newClient.id)] } : page
+      )
+    );
+    setTotal(1);
+    queryClient.setQueryData(queryKeys.client(newClient.id), newClient);
+    return newClient;
+  }, [queryClient, setTotal]);
 
-      return updatedClient;
-    } catch (err) {
-      console.error("Error updating client:", err);
-      throw err;
+  const updateClient = useCallback(async (clientId, clientData, updateOption = "fromNow") => {
+    const response = await axios.put("/api/clients", { id: clientId, ...clientData, updateOption });
+    const updatedClient = response.data;
+    queryClient.setQueryData(queryKeys.clients, (data) =>
+      updateClientPages(data, (page) => ({
+        ...page,
+        clients: (page.clients || []).map((c) => (c.id === clientId ? { ...c, ...updatedClient } : c)),
+      }))
+    );
+    queryClient.setQueryData(queryKeys.client(clientId), (old) => ({ ...(old || {}), ...updatedClient }));
+    if (updateOption === "allInvoices") {
+      // The server rewrote this client's details on every invoice
+      queryClient.invalidateQueries({ queryKey: queryKeys.invoicesForClient(clientId) });
     }
-  };
+    return updatedClient;
+  }, [queryClient]);
 
-  const deleteClient = async (clientId) => {
-    try {
-      await axios.delete(`/api/clients?id=${clientId}`);
+  const deleteClient = useCallback(async (clientId) => {
+    await axios.delete(`/api/clients?id=${clientId}`);
+    queryClient.setQueryData(queryKeys.clients, (data) =>
+      updateClientPages(data, (page) => ({
+        ...page,
+        clients: (page.clients || []).filter((c) => c.id !== clientId),
+      }))
+    );
+    setTotal(-1);
+    // The client's invoices were deleted with it
+    queryClient.removeQueries({ queryKey: queryKeys.invoicesForClient(clientId) });
+    queryClient.removeQueries({ queryKey: queryKeys.client(clientId) });
+  }, [queryClient, setTotal]);
 
-      // Optimistically update the client list
-      setClients((prev) => prev.filter((client) => client.id !== clientId));
-      setPagination((prev) => ({ ...prev, totalCount: Math.max(0, (prev.totalCount || 0) - 1) }));
-      setLastFetch(Date.now());
-    } catch (err) {
-      console.error("Error deleting client:", err);
-      throw err;
-    }
-  };
+  const getClientById = useCallback(
+    (clientId) => clients.find((client) => client.id === clientId),
+    [clients]
+  );
 
-  const getClientById = (clientId) => {
-    return clients.find((client) => client.id === clientId);
-  };
+  const { fetchNextPage, hasNextPage, isFetchingNextPage, refetch } = query;
+  const loadMoreClients = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  const refreshClients = () => {
-    fetchClients(true, true); // force refresh and reset pagination
-  };
-
-  // Initial fetch when user is loaded
-  useEffect(() => {
-    if (isLoaded && userId) {
-      fetchClients();
-    }
-  }, [isLoaded, userId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const refreshClients = useCallback(() => refetch(), [refetch]);
 
   const value = {
     clients,
-    loading,
-    loadingMore,
-    error,
+    // "loading" = no data yet (first load); background refreshes keep showing cached data
+    loading: query.isPending,
+    loadingMore: isFetchingNextPage,
+    error: query.error ? "Failed to fetch clients" : null,
     pagination,
-    fetchClients,
+    fetchClients: refreshClients,
     loadMoreClients,
     addClient,
     updateClient,
     deleteClient,
     getClientById,
     refreshClients,
-    lastFetch,
+    lastFetch: query.dataUpdatedAt || null,
   };
 
-  return (
-    <ClientContext.Provider value={value}>{children}</ClientContext.Provider>
-  );
+  return <ClientContext.Provider value={value}>{children}</ClientContext.Provider>;
 }

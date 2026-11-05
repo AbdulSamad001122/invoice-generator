@@ -1,6 +1,7 @@
 import React from "react";
 import {
   flattenInvoiceItems,
+  anyLineShowsQuantity,
   calculateItemsSubtotal,
   subItemPdfStyles as subStyles,
   SUB_ITEM_BULLET,
@@ -350,7 +351,9 @@ const YellowClassicTemplate = ({ invoiceData }) => {
 
   // Quantity can be hidden for the whole invoice: then Qty/Price columns are hidden
   // and the item/description columns take their space.
-  const showQuantity = invoiceData.includeQuantity !== false;
+  // Qty/Price columns appear when at least one line shows a quantity
+  // (older invoices may also have the invoice-wide switch off)
+  const showQuantity = invoiceData.includeQuantity !== false && anyLineShowsQuantity(items);
   // Fixed widths (not flex) so the sub-item indent can't shift the description column.
   // The Total column keeps its width; name (and description) share the rest.
   const totalColWidth = invoiceData.includeDescription ? 17.5 : 16.66;
@@ -548,7 +551,7 @@ const YellowClassicTemplate = ({ invoiceData }) => {
                       subCell,
                     ]}
                   >
-                    {isGroup ? "" : item.quantity || 1}
+                    {isGroup || item.showQuantity === false ? "" : item.quantity || 1}
                   </Text>
                 )}
                 {showQuantity && (
@@ -561,7 +564,7 @@ const YellowClassicTemplate = ({ invoiceData }) => {
                       subCell,
                     ]}
                   >
-                    {isGroup ? "" : `$${(item.rate || 0).toFixed(2)}`}
+                    {isGroup || item.showQuantity === false ? "" : `$${(item.rate || 0).toFixed(2)}`}
                   </Text>
                 )}
                 <Text

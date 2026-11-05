@@ -30,6 +30,32 @@ export const calculateItemsSubtotal = (items) =>
     0
   );
 
+// ---------- Per-line quantity visibility
+// Each plain item and each sub-item can hide its quantity (showQuantity: false).
+// Group items (items with sub-items) never show a quantity themselves.
+
+export const lineShowsQuantity = (line) => line?.showQuantity !== false;
+
+// The lines that can have a quantity: plain items, and the sub-items of groups
+export const quantityLines = (items) =>
+  (Array.isArray(items) ? items : []).flatMap((item) => (hasSubItems(item) ? getSubItems(item) : [item]));
+
+export const anyLineShowsQuantity = (items) => quantityLines(items).some(lineShowsQuantity);
+export const allLinesShowQuantity = (items) => quantityLines(items).every(lineShowsQuantity);
+
+// Older invoices used one invoice-wide switch (includeQuantity: false). Convert it
+// to per-line flags so they open correctly in the new form.
+export const applyInvoiceQuantityDefault = (items, includeQuantity) => {
+  if (!Array.isArray(items) || includeQuantity !== false) return items;
+  return items.map((item) => ({
+    ...item,
+    showQuantity: false,
+    ...(Array.isArray(item.subItems)
+      ? { subItems: item.subItems.map((sub) => ({ ...sub, showQuantity: false })) }
+      : {}),
+  }));
+};
+
 // Normalise items for PDF templates: every item and sub-item gets an `amount`.
 export const prepareItemsForPDF = (items) =>
   (Array.isArray(items) ? items : []).map((item) => {
@@ -39,6 +65,7 @@ export const prepareItemsForPDF = (items) =>
       quantity: toNumber(sub.quantity),
       rate: toNumber(sub.rate),
       amount: calculateLineAmount(sub),
+      showQuantity: lineShowsQuantity(sub),
     }));
     return {
       itemName: item.itemName || "",
@@ -46,6 +73,7 @@ export const prepareItemsForPDF = (items) =>
       quantity: toNumber(item.quantity),
       rate: toNumber(item.rate),
       amount: calculateItemAmount(item),
+      showQuantity: lineShowsQuantity(item),
       ...(subItems.length > 0 ? { subItems } : {}),
     };
   });

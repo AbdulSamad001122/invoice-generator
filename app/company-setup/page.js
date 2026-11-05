@@ -1,56 +1,40 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import CompanyProfileForm from "@/components/company-profile-form";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import { PageLoader } from "@/components/ui/spinner";
+import { useCompanyProfile } from "@/hooks/use-company-profile";
 
 
 export default function CompanySetupPage() {
   const { isLoaded, isSignedIn, user } = useUser();
   const router = useRouter();
-  const [hasCompanyProfile, setHasCompanyProfile] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [existingProfile, setExistingProfile] = useState(null);
+  // Shared, cached profile (instant if another page already loaded it)
+  const profileQuery = useCompanyProfile();
+  const profile = profileQuery.data;
+  const loading = profileQuery.isPending && !profileQuery.isError;
+  const hasCompanyProfile = Boolean(profile?.hasCompanyProfile);
+  const existingProfile = useMemo(
+    () =>
+      profile?.hasCompanyProfile
+        ? {
+            companyName: profile.companyName || "",
+            companyEmail: profile.companyEmail || "",
+            companyLogo: profile.companyLogo || "",
+            bankName: profile.bankName || "",
+            bankAccount: profile.bankAccount || "",
+            defaultDueDays: profile.defaultDueDays || null,
+          }
+        : null,
+    [profile]
+  );
 
   useEffect(() => {
-    const checkCompanyProfile = async () => {
-      if (!isSignedIn) {
-        router.push("/signin");
-        return;
-      }
-
-      try {
-        const response = await fetch("/api/company-profile");
-        if (response.ok) {
-          const result = await response.json();
-          if (result.success) {
-            setHasCompanyProfile(result.data.hasCompanyProfile);
-            if (result.data.hasCompanyProfile) {
-              setExistingProfile({
-                companyName: result.data.companyName || "",
-                companyEmail: result.data.companyEmail || "",
-                companyLogo: result.data.companyLogo || "",
-                bankName: result.data.bankName || "",
-                bankAccount: result.data.bankAccount || "",
-                defaultDueDays: result.data.defaultDueDays || null
-              });
-            }
-          }
-        }
-      } catch (error) {
-        console.error("Error checking company profile:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (isLoaded) {
-      checkCompanyProfile();
-    }
+    if (isLoaded && !isSignedIn) router.push("/signin");
   }, [isLoaded, isSignedIn, router]);
 
   const handleProfileSaved = (profileData) => {

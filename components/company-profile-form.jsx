@@ -17,12 +17,18 @@ import { X, Upload, Building2, ImageIcon, Trash2 } from "lucide-react";
 import { useAuth } from "@clerk/nextjs";
 import { useToast } from "@/contexts/ToastContext";
 import { useInvoices } from "@/contexts/InvoiceContext";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
+// Aliased: this file has its own local function named fetchCompanyProfile
+import { fetchCompanyProfile as fetchCompanyProfileData, useSetCompanyProfile } from "@/hooks/use-company-profile";
 import { Spinner } from "@/components/ui/spinner";
 
 export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = true, initialData = null }) {
   const { userId } = useAuth();
   const { toast } = useToast();
   const { invalidateAllInvoices } = useInvoices();
+  const queryClient = useQueryClient();
+  const setCompanyProfileCache = useSetCompanyProfile();
   const fileInputRef = useRef(null);
   const [formData, setFormData] = useState({
     companyName: "",
@@ -59,14 +65,15 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
 
     const fetchCompanyProfile = async () => {
       try {
-        const response = await fetch("/api/company-profile");
-        console.log('API Response Status:', response.status);
-        if (response.ok) {
-          const result = await response.json();
-          console.log('Company Profile API Response:', result);
+        // Cached: instant when the profile was already loaded elsewhere
+        const profileData = await queryClient.fetchQuery({
+          queryKey: queryKeys.companyProfile,
+          queryFn: fetchCompanyProfileData,
+          staleTime: 5 * 60 * 1000,
+        });
+        const result = { success: true, data: profileData };
+        {
           if (result.success && result.data) {
-            console.log('defaultDueDays from API:', result.data.defaultDueDays, typeof result.data.defaultDueDays);
-            console.log('All API data:', result.data);
             const logoUrl = result.data.companyLogo || "";
             const formDataToSet = {
               companyName: result.data.companyName || "",
@@ -76,13 +83,9 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
               bankAccount: result.data.bankAccount || "",
               defaultDueDays: result.data.defaultDueDays ? result.data.defaultDueDays.toString() : "",
             };
-            console.log('Setting form data:', formDataToSet);
-            console.log('defaultDueDays in form data:', formDataToSet.defaultDueDays);
             setFormData(formDataToSet);
             setLogoPreview(logoUrl);
           }
-        } else {
-          console.log('API Response not OK:', response.status, response.statusText);
         }
       } catch (error) {
         console.error("Error fetching company profile:", error);
@@ -220,6 +223,8 @@ export function CompanyProfileForm({ onClose, onSave, onProfileSaved, isModal = 
       const result = await response.json();
 
       if (response.ok && result.success) {
+        // Everyone reading the profile (dashboard, invoice form...) sees the new values at once
+        if (result.data) setCompanyProfileCache(result.data);
         // Existing invoices were rewritten on the server, so cached lists are stale
         if (updateOption === "allInvoices") invalidateAllInvoices();
         // Show success message with invoice update info if applicable

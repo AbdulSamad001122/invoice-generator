@@ -41,8 +41,13 @@ import {
   CornerDownRight,
   ImagePlus,
   Upload,
+  X,
 } from "lucide-react";
 import { useItems } from "@/contexts/ItemContext";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
+// Aliased: this file has its own local function named fetchCompanyProfile
+import { fetchCompanyProfile as fetchCompanyProfileData } from "@/hooks/use-company-profile";
 import { getDefaultTemplate } from "@/app/utils/templates/registry";
 import { renderInvoicePdfBlob, preloadPdfRenderer } from "@/app/utils/pdfRenderer";
 import { prepareInvoiceDataForPDF } from "@/app/utils/imageToBase64";
@@ -53,6 +58,10 @@ import {
   calculateLineAmount,
   calculateItemsSubtotal,
   prepareItemsForPDF,
+  lineShowsQuantity,
+  anyLineShowsQuantity,
+  allLinesShowQuantity,
+  applyInvoiceQuantityDefault,
 } from "@/app/utils/invoiceItems";
 import TemplateSelector from "@/components/template-selector";
 import axios from "axios";
@@ -70,6 +79,7 @@ export default function InvoiceForm({
     router.push("/");
   };
   const { getItemsForClient } = useItems();
+  const queryClient = useQueryClient();
   const [showSavedItemsDialog, setShowSavedItemsDialog] = useState(false);
   const [availableItems, setAvailableItems] = useState([]);
 
@@ -93,7 +103,7 @@ export default function InvoiceForm({
       clientEmail: invoiceData?.clientEmail || "",
       clientCustomFields: invoiceData?.clientCustomFields || [],
       // Items and Calculations
-      items: invoiceData?.items || [
+      items: applyInvoiceQuantityDefault(invoiceData?.items, invoiceData?.includeQuantity) || [
         { itemName: "", description: "", quantity: 1, rate: 0 },
       ],
       includeDescription: invoiceData?.includeDescription || false,
@@ -133,7 +143,7 @@ export default function InvoiceForm({
         clientEmail: invoiceData?.clientEmail || "",
         clientCustomFields: invoiceData?.clientCustomFields || [],
         // Items and Calculations
-        items: invoiceData?.items || [
+        items: applyInvoiceQuantityDefault(invoiceData?.items, invoiceData?.includeQuantity) || [
           { itemName: "", description: "", quantity: 1, rate: 0 },
         ],
         includeDescription: invoiceData?.includeDescription || false,
@@ -236,19 +246,21 @@ export default function InvoiceForm({
       
       setIsLoadingCompanyProfile(true);
       try {
-        const response = await fetch('/api/company-profile');
-        if (response.ok) {
-          const result = await response.json();
-          console.log('Company profile API response:', result);
+        // Cached: instant when the profile was already loaded elsewhere
+        const profileData = await queryClient.fetchQuery({
+          queryKey: queryKeys.companyProfile,
+          queryFn: fetchCompanyProfileData,
+          staleTime: 5 * 60 * 1000,
+        });
+        const result = { success: true, data: profileData };
+        {
           if (result.success && result.data) {
             const companyDefaultDueDays = result.data.defaultDueDays || 30;
-            console.log('Setting defaultDueDays to:', companyDefaultDueDays);
             setDefaultDueDays(companyDefaultDueDays);
             
             const issueDate = new Date();
             const calculatedDueDate = new Date(issueDate);
             calculatedDueDate.setDate(calculatedDueDate.getDate() + companyDefaultDueDays);
-            console.log('Calculated due date:', calculatedDueDate.toISOString().split('T')[0]);
             
             setFormData(prev => ({
               ...prev,
@@ -329,7 +341,7 @@ export default function InvoiceForm({
         if (!(line.itemName || "").trim()) {
           newErrors[`${prefix}_itemName`] = "Item name is required";
         }
-        if (formData.includeQuantity !== false && (!line.quantity || line.quantity <= 0)) {
+        if (lineShowsQuantity(line) && (!line.quantity || line.quantity <= 0)) {
           newErrors[`${prefix}_quantity`] = "Quantity must be greater than 0";
         }
         if (!line.rate || line.rate <= 0) {
@@ -360,6 +372,7 @@ export default function InvoiceForm({
   const saveInvoice = async () => {
     const invoicePayload = {
       ...formData,
+      includeQuantity: anyLineShowsQuantity(formData.items),
       clientId: preselectedClient?.id || null,
     };
     const response =
@@ -431,44 +444,66 @@ export default function InvoiceForm({
     }
   };
 
-  // Turning quantity off treats every line (and sub-item) as quantity 1,
-  // so the amount is just the price and totals stay correct.
-  const handleQuantityToggle = (checked) => {
-    // When hiding quantity, fold quantity × rate into the price so every line
-    // amount (and the invoice total) stays exactly the same.
-    const round2 = (n) => Math.round(n * 100) / 100;
-    const fold = (line) => {
-      const qty = Number(line.quantity) || 1;
-      return qty === 1
-        ? { ...line, quantity: 1 }
-        : { ...line, quantity: 1, rate: round2(qty * (Number(line.rate) || 0)) };
+  // Hiding a line's quantity folds quantity × rate into its price, so the line
+  // amount (and the invoice total) stays exactly the same.
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const setLineQuantityVisibility = (line, visible) => {
+    if (visible) return { ...line, showQuantity: true };
+    const qty = Number(line.quantity) || 1;
+    return {
+      ...line,
+      showQuantity: false,
+      quantity: 1,
+      ...(qty !== 1 ? { rate: round2(qty * (Number(line.rate) || 0)) } : {}),
     };
-    const changed = !checked && formData.items.some(
+  };
+  const clearQuantityErrors = (prefix) =>
+    setErrors((prev) => {
+      const next = { ...prev };
+      Object.keys(next)
+        .filter((k) => k.endsWith("_quantity") && (!prefix || k.startsWith(prefix)))
+        .forEach((k) => delete next[k]);
+      return next;
+    });
+
+  // "Show quantity on all items": turn every line on or off at once
+  const handleQuantityToggle = (checked) => {
+    const folded = !checked && formData.items.some(
       (item) =>
         (Number(item.quantity) || 1) !== 1 ||
         (item.subItems || []).some((sub) => (Number(sub.quantity) || 1) !== 1)
     );
     setFormData((prev) => ({
       ...prev,
-      includeQuantity: checked,
-      items: checked
-        ? prev.items
-        : prev.items.map((item) => ({
-            ...fold(item),
-            ...(Array.isArray(item.subItems) ? { subItems: item.subItems.map(fold) } : {}),
-          })),
+      items: prev.items.map((item) => ({
+        ...setLineQuantityVisibility(item, checked),
+        ...(Array.isArray(item.subItems)
+          ? { subItems: item.subItems.map((sub) => setLineQuantityVisibility(sub, checked)) }
+          : {}),
+      })),
     }));
-    if (changed) {
+    if (!checked) clearQuantityErrors();
+    if (folded) {
       toast.info("Quantities were folded into the prices, so the totals stay the same.");
     }
-    if (!checked) {
-      setErrors((prev) => {
-        const next = { ...prev };
-        Object.keys(next)
-          .filter((k) => k.endsWith("_quantity"))
-          .forEach((k) => delete next[k]);
-        return next;
-      });
+  };
+
+  // Show or hide the quantity of one item, or of one sub-item (subIndex given)
+  const setQuantityVisible = (index, subIndex, visible) => {
+    setFormData((prev) => {
+      const items = [...prev.items];
+      const item = items[index];
+      if (subIndex === null || subIndex === undefined) {
+        items[index] = setLineQuantityVisibility(item, visible);
+      } else {
+        const subItems = [...(item.subItems || [])];
+        subItems[subIndex] = setLineQuantityVisibility(subItems[subIndex], visible);
+        items[index] = { ...item, subItems };
+      }
+      return { ...prev, items };
+    });
+    if (!visible) {
+      clearQuantityErrors(subIndex === null || subIndex === undefined ? `item_${index}_` : `item_${index}_sub_${subIndex}_`);
     }
   };
 
@@ -498,8 +533,9 @@ export default function InvoiceForm({
                 description: "",
                 quantity: item.quantity || 1,
                 rate: item.rate,
+                showQuantity: lineShowsQuantity(item),
               }
-            : { itemName: "", description: "", quantity: 1, rate: 0 },
+            : { itemName: "", description: "", quantity: 1, rate: 0, showQuantity: lineShowsQuantity(existing[existing.length - 1] || item) },
         ],
       };
       return { ...prev, items: newItems };
@@ -543,7 +579,13 @@ export default function InvoiceForm({
       ...prev,
       items: [
         ...prev.items,
-        { itemName: "", description: "", quantity: 1, rate: 0 },
+        {
+          itemName: "",
+          description: "",
+          quantity: 1,
+          rate: 0,
+          showQuantity: prev.items.length === 0 || anyLineShowsQuantity(prev.items),
+        },
       ],
     }));
   };
@@ -636,7 +678,7 @@ export default function InvoiceForm({
       showStatusOnPDF: showStatusOnPDF,
       items: prepareItemsForPDF(formData.items),
       includeDescription: formData.includeDescription,
-      includeQuantity: formData.includeQuantity !== false,
+      includeQuantity: anyLineShowsQuantity(formData.items),
       taxRate: formData.taxRate,
       discountRate: formData.discountRate,
       notes: formData.notes || "Thank you for your business!",
@@ -1341,11 +1383,11 @@ export default function InvoiceForm({
               <div className="flex items-center space-x-2">
                 <Switch
                   id="includeQuantity"
-                  checked={formData.includeQuantity !== false}
+                  checked={allLinesShowQuantity(formData.items)}
                   onCheckedChange={handleQuantityToggle}
                 />
                 <Label htmlFor="includeQuantity" className="text-sm font-medium">
-                  Show quantity
+                  Show quantity on all items
                 </Label>
               </div>
               </div>
@@ -1358,10 +1400,10 @@ export default function InvoiceForm({
                 {formData.items.map((item, index) => {
                   const subItems = getSubItems(item);
                   const isGroup = subItems.length > 0;
-                  const showQuantity = formData.includeQuantity !== false;
+                  const showQuantity = lineShowsQuantity(item);
                   const nameSpan = formData.includeDescription
-                    ? showQuantity ? "md:col-span-3" : "md:col-span-5"
-                    : showQuantity ? "md:col-span-5" : "md:col-span-7";
+                    ? "md:col-span-3"
+                    : "md:col-span-5";
                   const fieldError = (key) =>
                     errors[key] ? (
                       <p className="text-destructive text-sm mt-1">
@@ -1423,14 +1465,16 @@ export default function InvoiceForm({
                         )}
 
                         {isGroup ? (
-                          <div className={`${showQuantity ? "md:col-span-4" : "md:col-span-2"} h-10 flex items-center text-sm text-muted-foreground`}>
+                          <div className={`md:col-span-4 h-10 flex items-center text-sm text-muted-foreground`}>
                             Total of {subItems.length} sub-item
                             {subItems.length === 1 ? "" : "s"}
                           </div>
                         ) : (
                           <>
-                            <div className={showQuantity ? "md:col-span-2" : "hidden"}>
+                            <div className="md:col-span-2">
                               <Label htmlFor={`quantity-${index}`}>Quantity</Label>
+                              {showQuantity ? (
+                              <div className="relative">
                               <Input
                                 id={`quantity-${index}`}
                                 type="number"
@@ -1448,12 +1492,33 @@ export default function InvoiceForm({
                                     parseInt(e.target.value) || 0
                                   )
                                 }
-                                className={
+                                className={`pr-8 ${
                                   errors[`item_${index}_quantity`]
                                     ? "border-destructive"
                                     : ""
-                                }
+                                }`}
                               />
+                              <button
+                                type="button"
+                                onClick={() => setQuantityVisible(index, null, false)}
+                                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                title="Hide quantity on this line"
+                                aria-label="Hide quantity on this line"
+                              >
+                                <X className="size-3.5" />
+                              </button>
+                              </div>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => setQuantityVisible(index, null, true)}
+                                  className="h-9 w-full border-dashed text-muted-foreground"
+                                  title="Show a quantity on this line"
+                                >
+                                  <Plus /> Qty
+                                </Button>
+                              )}
                               {fieldError(`item_${index}_quantity`)}
                             </div>
 
@@ -1568,7 +1633,9 @@ export default function InvoiceForm({
                                   </div>
                                 )}
 
-                                <div className={showQuantity ? "md:col-span-2" : "hidden"}>
+                                <div className="md:col-span-2">
+                                  {lineShowsQuantity(sub) ? (
+                                  <div className="relative">
                                   <Input
                                     aria-label="Sub-item quantity"
                                     type="number"
@@ -1588,12 +1655,33 @@ export default function InvoiceForm({
                                       )
                                     }
                                     placeholder="Qty"
-                                    className={
+                                    className={`pr-8 ${
                                       errors[`${prefix}_quantity`]
                                         ? "border-destructive"
                                         : ""
-                                    }
+                                    }`}
                                   />
+                                  <button
+                                    type="button"
+                                    onClick={() => setQuantityVisible(index, subIndex, false)}
+                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                    title="Hide quantity on this sub-item"
+                                    aria-label="Hide quantity on this sub-item"
+                                  >
+                                    <X className="size-3.5" />
+                                  </button>
+                                  </div>
+                                  ) : (
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      onClick={() => setQuantityVisible(index, subIndex, true)}
+                                      className="h-9 w-full border-dashed text-muted-foreground"
+                                      title="Show a quantity on this sub-item"
+                                    >
+                                      <Plus /> Qty
+                                    </Button>
+                                  )}
                                   {fieldError(`${prefix}_quantity`)}
                                 </div>
 

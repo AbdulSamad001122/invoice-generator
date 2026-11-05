@@ -17,6 +17,8 @@ import {
   Users,
 } from "lucide-react";
 import { useClients } from "@/contexts/ClientContext";
+import { prefetchClientInvoices } from "@/contexts/InvoiceContext";
+import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/contexts/ToastContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +41,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import CompanyProfileForm from "@/components/company-profile-form";
+import { useCompanyProfile } from "@/hooks/use-company-profile";
 
 const getInitials = (name = "") =>
   name
@@ -116,27 +119,16 @@ export default function Home() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [clientForm, setClientForm] = useState({ name: "", email: "" });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [hasCompanyProfile, setHasCompanyProfile] = useState(null); // null = loading
   const [showCompanyProfileModal, setShowCompanyProfileModal] = useState(false);
 
-  // Check company profile status
-  useEffect(() => {
-    if (!isLoaded || !isSignedIn) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch("/api/company-profile");
-        const result = response.ok ? await response.json() : null;
-        if (!cancelled) setHasCompanyProfile(Boolean(result?.success && result.data.hasCompanyProfile));
-      } catch (error) {
-        console.error("Error checking company profile:", error);
-        if (!cancelled) setHasCompanyProfile(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isLoaded, isSignedIn]);
+  // Shared, cached profile (null while it loads for the first time)
+  const profileQuery = useCompanyProfile();
+  const queryClient = useQueryClient();
+  const hasCompanyProfile = profileQuery.data
+    ? Boolean(profileQuery.data.hasCompanyProfile)
+    : profileQuery.isError
+      ? false
+      : null;
 
   if (!isLoaded) return <PageLoader fullScreen />;
   if (!isSignedIn) return <Landing />;
@@ -260,6 +252,8 @@ export default function Home() {
               <Link
                 key={client.id}
                 href={`/dashboard/${client.id}`}
+                onMouseEnter={() => prefetchClientInvoices(queryClient, client.id)}
+                onFocus={() => prefetchClientInvoices(queryClient, client.id)}
                 className="group flex items-center gap-3 rounded-xl border bg-card p-4 transition-colors hover:border-ring/50 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
@@ -349,7 +343,7 @@ export default function Home() {
           </DialogHeader>
           <CompanyProfileForm
             onSave={() => {
-              setHasCompanyProfile(true);
+              // The form updates the cached profile itself
               setShowCompanyProfileModal(false);
             }}
             onClose={() => setShowCompanyProfileModal(false)}

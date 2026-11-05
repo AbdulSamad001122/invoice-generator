@@ -4,7 +4,8 @@ import { useState, useRef, useEffect } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useRouter, usePathname } from "next/navigation";
 import { useClients } from "@/contexts/ClientContext";
-import { useInvoices } from "@/contexts/InvoiceContext";
+import { useInvoices, prefetchClientInvoices } from "@/contexts/InvoiceContext";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Sidebar,
   SidebarContent,
@@ -75,6 +76,7 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
     loadMoreClients,
   } = useClients();
   const { refreshInvoices } = useInvoices();
+  const queryClient = useQueryClient();
   const clientsContainerRef = useRef(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [clientForm, setClientForm] = useState({ name: "", email: "" });
@@ -390,6 +392,9 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
                           <Link
                             href={`/dashboard/${client.id}`}
                             onClick={() => onClientSelect && onClientSelect(client)}
+                            // Start loading this client's invoices before the click
+                            onMouseEnter={() => prefetchClientInvoices(queryClient, client.id)}
+                            onFocus={() => prefetchClientInvoices(queryClient, client.id)}
                           >
                             <span
                               className={`flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${

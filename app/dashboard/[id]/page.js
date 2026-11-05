@@ -6,6 +6,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { ArrowLeft, Mail, Plus, UserX } from "lucide-react";
 import axios from "axios";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
 import { useClients } from "@/contexts/ClientContext";
 import { useInvoices } from "@/contexts/InvoiceContext";
 import { Button } from "@/components/ui/button";
@@ -37,22 +39,14 @@ export default function ClientDashboard() {
   // The sidebar only holds the first page of clients, so fetch this client
   // directly when it isn't in that list (e.g. an older client or a shared link).
   const clientFromList = getClientById(clientId);
-  const [fetchedClient, setFetchedClient] = useState(null);
-  const [notFound, setNotFound] = useState(false);
-  const client = clientFromList || (fetchedClient?.id === clientId ? fetchedClient : null);
-
-  useEffect(() => {
-    setNotFound(false);
-    if (!isSignedIn || clientsLoading || clientFromList || !clientId) return;
-    let cancelled = false;
-    axios
-      .get(`/api/clients/${clientId}`)
-      .then((res) => !cancelled && setFetchedClient(res.data))
-      .catch(() => !cancelled && setNotFound(true));
-    return () => {
-      cancelled = true;
-    };
-  }, [clientId, isSignedIn, clientsLoading, clientFromList]);
+  const clientQuery = useQuery({
+    queryKey: queryKeys.client(clientId),
+    queryFn: async () => (await axios.get(`/api/clients/${clientId}`)).data,
+    enabled: Boolean(isSignedIn && clientId && !clientsLoading && !clientFromList),
+    retry: false,
+  });
+  const client = clientFromList || clientQuery.data || null;
+  const notFound = !clientFromList && clientQuery.isError;
 
   // Leave the form when switching to another client
   useEffect(() => {
