@@ -17,11 +17,12 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { X, Plus, Check } from "lucide-react";
 import { useItems } from "@/contexts/ItemContext";
-import { useClients } from "@/contexts/ClientContext";
+import { useAllClients } from "@/contexts/ClientContext";
 
 export function ItemForm({ onClose, onItemAdded, editItem = null }) {
   const { addItem, updateItem } = useItems();
-  const { clients } = useClients();
+  // Every client, not just the pages loaded in the sidebar
+  const { clients } = useAllClients();
   const [formData, setFormData] = useState({
     name: "",
     price: "",

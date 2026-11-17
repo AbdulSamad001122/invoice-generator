@@ -13,19 +13,21 @@ import {
 } from "@/lib/validation";
 import { applyRateLimit, createRateLimitResponse } from "@/lib/rateLimiter";
 
+const DEFAULT_PAGE_SIZE = 5;
+
 // GET /api/clients - Fetch clients for the authenticated user with pagination support
 export async function GET(request) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'read');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'read', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     // Parse pagination parameters from URL
@@ -85,24 +87,32 @@ export async function GET(request) {
         },
       });
     } else {
-      // Fallback to offset-based pagination for backward compatibility
+      // Offset-based pagination (used by the UI's infinite scroll)
       const { page, limit, offset } = validatePagination(
         searchParams.get("page"),
-        searchParams.get("limit"),
+        searchParams.get("limit") ?? DEFAULT_PAGE_SIZE,
         50 // Max 50 clients per page
       );
 
-      // Count and page query run in parallel (one round-trip instead of two)
-      const [totalCount, clients] = await Promise.all([
-        prisma.client.count({
-          where: {
-            userId: dbUser.id,
-          },
+      // Optional server-side search on name/email
+      const searchTerm = (searchParams.get("search") || "").trim().slice(0, 100);
+      const whereClause = {
+        userId: dbUser.id,
+        ...(searchTerm && {
+          OR: [
+            { name: { contains: searchTerm, mode: "insensitive" } },
+            { email: { contains: searchTerm, mode: "insensitive" } },
+          ],
         }),
+      };
+
+      // Fetch one extra row to compute hasMore without a count query.
+      // The total count is only needed (and only computed) for the first page,
+      // in parallel with the page query.
+      const [totalCount, clients] = await Promise.all([
+        page === 1 ? prisma.client.count({ where: whereClause }) : Promise.resolve(null),
         prisma.client.findMany({
-          where: {
-            userId: dbUser.id,
-          },
+          where: whereClause,
           select: {
             id: true,
             name: true,
@@ -115,23 +125,22 @@ export async function GET(request) {
             createdAt: "desc",
           },
           skip: offset,
-          take: limit,
+          take: limit + 1,
         }),
       ]);
 
-      const totalPages = Math.ceil(totalCount / limit);
-      const hasMore = page < totalPages;
+      const hasMore = clients.length > limit;
+      if (hasMore) {
+        clients.pop(); // Remove the extra item
+      }
 
-      return NextResponse.json({
-        clients,
-        pagination: {
-          page,
-          limit,
-          totalCount,
-          totalPages,
-          hasMore,
-        },
-      });
+      const pagination = { page, limit, hasMore };
+      if (totalCount !== null) {
+        pagination.totalCount = totalCount;
+        pagination.totalPages = Math.ceil(totalCount / limit);
+      }
+
+      return NextResponse.json({ clients, pagination });
     }
   } catch (error) {
     console.error("Error fetching clients:", error);
@@ -145,16 +154,16 @@ export async function GET(request) {
 // POST /api/clients - Create a new client
 export async function POST(request) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'write');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'write', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     // Validate request size
@@ -221,16 +230,16 @@ export async function POST(request) {
 // PUT /api/clients/[id] - Update an existing client
 export async function PUT(request) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'write');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'write', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     // Validate request size
@@ -328,16 +337,16 @@ export async function PUT(request) {
 // DELETE /api/clients/[id] - Delete a client
 export async function DELETE(request) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'write');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'write', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     const url = new URL(request.url);

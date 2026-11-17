@@ -36,7 +36,7 @@ export default clerkMiddleware(async (auth, req) => {
     "font-src 'self' data:",
     // data:/blob: let the PDF library load its layout engine (WebAssembly)
     "connect-src 'self' data: blob: https://clerk.com https://*.clerk.accounts.dev https://clerk-telemetry.com https://*.clerk-telemetry.com https://vitals.vercel-insights.com",
-    "frame-src 'self' https://clerk.com https://*.clerk.accounts.dev https://challenges.cloudflare.com",
+    "frame-src 'self' blob: https://clerk.com https://*.clerk.accounts.dev https://challenges.cloudflare.com",
     "worker-src 'self' blob:"
   ].join('; ')
   

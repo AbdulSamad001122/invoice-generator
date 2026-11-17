@@ -13,16 +13,16 @@ import { applyRateLimit, createRateLimitResponse } from "@/lib/rateLimiter";
 // GET /api/items/[id] - Get a specific item
 export async function GET(request, { params }) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'read');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'read', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     const user = await getCachedUser(userId);
@@ -76,16 +76,16 @@ export async function GET(request, { params }) {
 // PUT /api/items/[id] - Update an item
 export async function PUT(request, { params }) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'write');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'write', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     // Validate request size
@@ -224,16 +224,16 @@ export async function PUT(request, { params }) {
 // DELETE /api/items/[id] - Delete an item
 export async function DELETE(request, { params }) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'write');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'write', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     const user = await getCachedUser(userId);

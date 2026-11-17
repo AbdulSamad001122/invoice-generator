@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { getCachedUser } from "@/lib/userCache";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { renumberClientInvoices, isAutoRenumberingEnabled } from "@/app/utils/invoiceRenumbering";
 import { 
   validatePagination, 
@@ -17,19 +18,14 @@ import { performanceMiddleware, trackDbQuery } from "@/lib/performanceMonitor";
 import { securityMiddleware, securityAudit, SecurityEventTypes, RiskLevels } from "@/lib/securityAudit";
 import { logErrorWithMonitoring, AppError, ErrorTypes } from "@/lib/errorHandler";
 
+const DEFAULT_PAGE_SIZE = 5;
+
 export async function GET(request) {
   // Start performance monitoring
   const perfTracker = performanceMiddleware(request);
   let user = null;
-  
-  try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'search');
-    if (rateLimitResult.isLimited) {
-      perfTracker.end(429, 0);
-      return createRateLimitResponse(rateLimitResult);
-    }
 
+  try {
     // Security middleware check
     const securityCheck = securityMiddleware(request);
     if (securityCheck.hasIssues && securityCheck.riskLevel === RiskLevels.HIGH) {
@@ -49,19 +45,38 @@ export async function GET(request) {
     const { userId } = await auth();
 
     if (!userId) {
+      perfTracker.end(401, 0);
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const { searchParams } = new URL(request.url);
+
+    // Search parameters (validated below)
+    const searchTerm = searchParams.get("search");
+    const searchDate = searchParams.get("date");
+    const searchStatus = searchParams.get("status");
+
+    // A new filtered query (page 1) uses the stricter 'search' bucket; further
+    // pages of it (infinite scroll, 5 at a time) and plain lists use 'read'.
+    // Keyed per user.
+    const requestedPage = Number(searchParams.get("page") || "1");
+    const isNewFilteredQuery = Boolean(searchTerm || searchDate || searchStatus) && requestedPage <= 1;
+    const rateLimitType = isNewFilteredQuery ? 'search' : 'read';
+    const rateLimitResult = applyRateLimit(request, rateLimitType, userId);
+    if (rateLimitResult.isLimited) {
+      perfTracker.end(429, 0);
+      return createRateLimitResponse(rateLimitResult);
+    }
+
     const clientId = sanitizeString(searchParams.get("clientId"));
     const useCursor = searchParams.get("cursor") !== null || searchParams.get("use_cursor") === "true";
-    
+
     // Validate pagination parameters
     let page, limit, offset, cursor;
     if (useCursor) {
       const cursorPagination = validateCursorPagination(
         searchParams.get("cursor"),
-        searchParams.get("limit"),
+        searchParams.get("limit") ?? DEFAULT_PAGE_SIZE,
         20 // Max 20 invoices per page
       );
       cursor = cursorPagination.cursor;
@@ -69,36 +84,33 @@ export async function GET(request) {
     } else {
       const offsetPagination = validatePagination(
         searchParams.get("page"),
-        searchParams.get("limit"),
+        searchParams.get("limit") ?? DEFAULT_PAGE_SIZE,
         20 // Max 20 invoices per page
       );
       page = offsetPagination.page;
       limit = offsetPagination.limit;
       offset = offsetPagination.offset;
     }
-    
-    // Validate and sanitize search parameters
-    const searchTerm = searchParams.get("search");
-    const searchDate = searchParams.get("date");
-    const searchStatus = searchParams.get("status");
 
     if (!clientId) {
+      perfTracker.end(400, 0);
       return NextResponse.json(
         { error: "Client ID is required" },
         { status: 400 }
       );
     }
 
-    // Use cached user lookup to reduce database queries
-    user = await getCachedUser(userId);
-
     // Validate client ID format
-    if (!clientId || !/^[a-zA-Z0-9_-]+$/.test(clientId)) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(clientId)) {
+      perfTracker.end(400, 0);
       return NextResponse.json(
         { error: "Invalid client ID format" },
         { status: 400 }
       );
     }
+
+    // Use cached user lookup to reduce database queries
+    user = await getCachedUser(userId);
 
     // Build base where clause
     const whereClause = {
@@ -124,7 +136,7 @@ export async function GET(request) {
       if (dateValidation.isValid) {
         // Convert to proper date format for JSON search
         const formattedDate = dateValidation.value; // YYYY-MM-DD format
-        
+
         const dateConditions = [
           {
             data: {
@@ -149,12 +161,20 @@ export async function GET(request) {
       }
     }
 
-    // Add validated status search condition
-    // Temporarily disabled JSON filtering due to Prisma compatibility issues
-    // TODO: Implement client-side filtering or use raw SQL
+    // Status lives inside the JSON `data` column. Filter it in SQL so offset
+    // paging stays correct. Invoices without a status (key missing or JSON
+    // null) count as PENDING, matching the UI default. Prisma.AnyNull on a
+    // JSON path compiles to `data #> '{status}' IS NULL OR = 'null'::jsonb`.
     if (searchStatus) {
-      console.log('Status filtering requested:', searchStatus);
-      // Will be handled after fetching all invoices
+      const statusValidation = validateInvoiceStatus(searchStatus);
+      if (statusValidation.isValid) {
+        const statusCondition = { data: { path: ["status"], equals: statusValidation.value } };
+        searchConditions.push(
+          statusValidation.value === "PENDING"
+            ? { OR: [statusCondition, { data: { path: ["status"], equals: Prisma.AnyNull } }] }
+            : statusCondition
+        );
+      }
     }
 
     // Combine search conditions with AND logic
@@ -162,75 +182,36 @@ export async function GET(request) {
       whereClause.AND = searchConditions;
     }
 
-    let invoices, totalCount;
-    
+    const invoiceSelect = {
+      id: true,
+      data: true, // Contains invoice details including status
+      createdAt: true,
+      updatedAt: true,
+      userId: true, // Needed for security checks
+    };
+
     if (useCursor) {
       // Cursor-based pagination - no need for count query
       const findQuery = trackDbQuery('FIND_MANY', 'invoice');
-      invoices = await prisma.invoice.findMany({
+      const invoices = await prisma.invoice.findMany({
         where: whereClause,
-        select: {
-          id: true,
-          data: true, // Contains invoice details including status
-          createdAt: true,
-          updatedAt: true,
-          userId: true, // Needed for security checks
-        },
+        select: invoiceSelect,
         orderBy: {
           id: "desc", // Use ID for consistent cursor ordering
         },
         take: limit + 1, // Fetch one extra to check if there are more
       });
       findQuery.end(invoices.length);
-      totalCount = null; // Not needed for cursor pagination
-    } else {
-      // Offset-based pagination (legacy)
-      // When filtering by status every row is fetched, so the count isn't needed.
-      // Otherwise count and page query run in parallel (one round-trip instead of two).
-      const findQuery = trackDbQuery('FIND_MANY', 'invoice');
-      const countPromise = searchStatus
-        ? Promise.resolve(null)
-        : prisma.invoice.count({ where: whereClause });
-      const findPromise = prisma.invoice.findMany({
-        where: whereClause,
-        select: {
-          id: true,
-          data: true, // Contains invoice details including status
-          createdAt: true,
-          updatedAt: true,
-          userId: true, // Needed for security checks
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-        // When status filtering is applied, fetch all records to ensure proper filtering
-        skip: searchStatus ? 0 : offset,
-        take: searchStatus ? undefined : limit, // Fetch all when filtering by status
-      });
-      [totalCount, invoices] = await Promise.all([countPromise, findPromise]);
-      findQuery.end(invoices.length);
-    }
 
-    // Status lives inside the JSON `data` field, so it is filtered in code
-    const statusValidation = searchStatus ? validateInvoiceStatus(searchStatus) : null;
-    const filterByStatus = (list) =>
-      statusValidation?.isValid
-        ? list.filter((invoice) => invoice.data && invoice.data.status === statusValidation.value)
-        : list;
-
-    if (useCursor) {
-      // Handle cursor-based pagination response
       const hasMore = invoices.length > limit;
       if (hasMore) {
         invoices.pop(); // Remove the extra item
       }
 
-      // Cursor comes from the last fetched row (before filtering) so paging continues correctly
       const nextCursor = hasMore && invoices.length > 0 ? generateCursor(invoices[invoices.length - 1].id) : null;
 
-      invoices = filterByStatus(invoices);
-
-      const response = NextResponse.json({ 
+      perfTracker.end(200, 0);
+      return NextResponse.json({
         invoices,
         pagination: {
           limit,
@@ -241,44 +222,46 @@ export async function GET(request) {
           }
         },
       });
-      
-      perfTracker.end(200, JSON.stringify(response).length);
-      return response;
-    } else {
-      // Handle offset-based pagination response (legacy)
-      // Apply pagination after filtering (only when status filtering is applied)
-      let finalTotalCount = totalCount;
-      if (searchStatus) {
-        // All matching rows were fetched; filter, count, then paginate
-        invoices = filterByStatus(invoices);
-        finalTotalCount = invoices.length;
-        invoices = invoices.slice(offset, offset + limit);
-      }
-      // When no status filtering, pagination is already applied in the query
-      const totalPages = Math.ceil(finalTotalCount / limit);
-      const hasMore = page < totalPages;
+    }
 
-      const response = NextResponse.json({ 
-        invoices,
-        pagination: {
-          page,
-          limit,
-          totalCount: finalTotalCount,
-          totalPages,
-          hasMore,
+    // Offset-based pagination (used by the UI's infinite scroll).
+    // Fetch one extra row to compute hasMore; the total count is only computed
+    // for the first page, in parallel with the page query.
+    const findQuery = trackDbQuery('FIND_MANY', 'invoice');
+    const [totalCount, invoices] = await Promise.all([
+      page === 1 ? prisma.invoice.count({ where: whereClause }) : Promise.resolve(null),
+      prisma.invoice.findMany({
+        where: whereClause,
+        select: invoiceSelect,
+        orderBy: {
+          createdAt: "desc",
         },
-      });
-      
-      perfTracker.end(200, JSON.stringify(response).length);
-       return response;
-     }
+        skip: offset,
+        take: limit + 1,
+      }),
+    ]);
+    findQuery.end(invoices.length);
+
+    const hasMore = invoices.length > limit;
+    if (hasMore) {
+      invoices.pop(); // Remove the extra item
+    }
+
+    const pagination = { page, limit, hasMore };
+    if (totalCount !== null) {
+      pagination.totalCount = totalCount;
+      pagination.totalPages = Math.ceil(totalCount / limit);
+    }
+
+    perfTracker.end(200, 0);
+    return NextResponse.json({ invoices, pagination });
   } catch (error) {
     logErrorWithMonitoring(error, {
       context: 'GET /api/invoices',
       userId: user?.id || 'unknown',
       searchParams: Object.fromEntries(new URL(request.url).searchParams)
     });
-    
+
     perfTracker.end(500, 0);
     return NextResponse.json(
       { error: "Internal server error" },

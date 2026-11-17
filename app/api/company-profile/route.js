@@ -13,16 +13,16 @@ import { applyRateLimit, createRateLimitResponse } from "@/lib/rateLimiter";
 // GET /api/company-profile - Fetch company profile for the authenticated user
 export async function GET(request) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'read');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'read', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     // Use cached user lookup to reduce database queries
@@ -73,16 +73,16 @@ export async function GET(request) {
 // POST /api/company-profile - Create or update company profile
 export async function POST(request) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'write');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'write', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     // Validate request size

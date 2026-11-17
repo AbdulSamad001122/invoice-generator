@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
 import { performanceHealthCheck, performanceMonitor } from '../../../lib/performanceMonitor.js';
 import { performSecurityHealthCheck, generateSecurityReport } from '../../../lib/securityAudit.js';
-import { rateLimiter } from '../../../lib/rateLimiter.js';
+import { applyRateLimit } from '../../../lib/rateLimiter.js';
 
 const prisma = new PrismaClient();
 
@@ -16,8 +16,8 @@ const prisma = new PrismaClient();
  */
 export async function GET(request) {
   // Apply rate limiting for health checks
-  const rateLimitResult = await rateLimiter(request, 'health');
-  if (!rateLimitResult.success) {
+  const rateLimitResult = applyRateLimit(request, 'read');
+  if (rateLimitResult.isLimited) {
     return NextResponse.json(
       { error: 'Too many requests' },
       { status: 429 }
@@ -162,8 +162,8 @@ export async function GET(request) {
  */
 export async function POST(request) {
   // Apply rate limiting
-  const rateLimitResult = await rateLimiter(request, 'health');
-  if (!rateLimitResult.success) {
+  const rateLimitResult = applyRateLimit(request, 'read');
+  if (rateLimitResult.isLimited) {
     return NextResponse.json(
       { error: 'Too many requests' },
       { status: 429 }

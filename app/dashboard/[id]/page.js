@@ -6,10 +6,11 @@ import { useParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { ArrowLeft, Mail, Plus, UserX } from "lucide-react";
 import axios from "axios";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/queryKeys";
+import { CLIENT_RESELECT_EVENT } from "@/lib/events";
 import { useClients } from "@/contexts/ClientContext";
-import { useInvoices } from "@/contexts/InvoiceContext";
+import { useInvoices, trimClientInvoicePages } from "@/contexts/InvoiceContext";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageLoader } from "@/components/ui/spinner";
@@ -30,19 +31,26 @@ export default function ClientDashboard() {
   const params = useParams();
   const router = useRouter();
   const clientId = params.id;
-  const { getClientById, loading: clientsLoading } = useClients();
+  const { getClientById } = useClients();
   const { createInvoice, updateInvoice } = useInvoices();
+  const queryClient = useQueryClient();
+
+  // False during hydration, true right after (see the loading guard below)
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => setHasMounted(true), []);
 
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
 
-  // The sidebar only holds the first page of clients, so fetch this client
+  // The client list only holds the pages loaded so far, so fetch this client
   // directly when it isn't in that list (e.g. an older client or a shared link).
+  // This runs alongside the list's first load instead of waiting for it.
   const clientFromList = getClientById(clientId);
   const clientQuery = useQuery({
     queryKey: queryKeys.client(clientId),
-    queryFn: async () => (await axios.get(`/api/clients/${clientId}`)).data,
-    enabled: Boolean(isSignedIn && clientId && !clientsLoading && !clientFromList),
+    queryFn: async ({ signal }) => (await axios.get(`/api/clients/${clientId}`, { signal })).data,
+    enabled: Boolean(isSignedIn && clientId && !clientFromList),
+    staleTime: 5 * 60 * 1000,
     retry: false,
   });
   const client = clientFromList || clientQuery.data || null;
@@ -52,6 +60,25 @@ export default function ClientDashboard() {
   useEffect(() => {
     setShowInvoiceForm(false);
     setEditingInvoice(null);
+  }, [clientId]);
+
+  // When leaving this client (another client or another page), shrink its
+  // cached invoice lists back to the first page so the next visit or refresh
+  // costs one request. Done here rather than in InvoiceList, which also
+  // unmounts while the invoice form is open.
+  useEffect(() => {
+    return () => trimClientInvoicePages(queryClient, clientId);
+  }, [queryClient, clientId]);
+
+  // Clicking this client in the sidebar while on its page returns to the invoice list
+  useEffect(() => {
+    const handleReselect = (e) => {
+      if (e.detail !== clientId) return;
+      setShowInvoiceForm(false);
+      setEditingInvoice(null);
+    };
+    window.addEventListener(CLIENT_RESELECT_EVENT, handleReselect);
+    return () => window.removeEventListener(CLIENT_RESELECT_EVENT, handleReselect);
   }, [clientId]);
 
   useEffect(() => {
@@ -78,7 +105,14 @@ export default function ClientDashboard() {
     setShowInvoiceForm(true);
   };
 
-  if (!isLoaded || !isSignedIn) return <PageLoader fullScreen />;
+  // Signed out: the effect above redirects to sign-in.
+  if (isLoaded && !isSignedIn) return <PageLoader fullScreen />;
+  // While Clerk is still loading, show this client from the cache (restored after
+  // a refresh) instead of a spinner. Safe: middleware only serves /dashboard to
+  // signed-in users, and the cache is per user and wiped on sign-out.
+  // Not on the very first (hydration) render: the server rendered the spinner,
+  // so the browser must too, or React reports a hydration mismatch.
+  if (!isLoaded && (!client || !hasMounted)) return <PageLoader fullScreen />;
 
   if (notFound) {
     return (

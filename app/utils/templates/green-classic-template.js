@@ -1,12 +1,13 @@
 import React from "react";
 import {
-  flattenInvoiceItems,
+  flattenInvoiceRows,
+  getPartitionTotals,
   anyLineShowsQuantity,
   calculateItemsSubtotal,
   subItemPdfStyles as subStyles,
   SUB_ITEM_BULLET,
 } from "../invoiceItems";
-import { normalizePaymentUrl, getPaymentLinkText, displayUrl } from "../paymentLink";
+import { normalizePaymentUrl, getPaymentLinkText } from "../paymentLink";
 import {
   Document,
   Page,
@@ -15,6 +16,9 @@ import {
   StyleSheet,
   Image,
   Link,
+  Svg,
+  Line,
+  Polyline,
 } from "@react-pdf/renderer";
 
 // Create styles for Green Classic Template (based on the provided image)
@@ -29,16 +33,11 @@ const styles = StyleSheet.create({
   // Green header background
   headerBackground: {
     backgroundColor: "#9ACD32",
-    height: 80,
+    minHeight: 80,
     marginBottom: 20,
-    position: "relative",
   },
   headerContent: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    minHeight: 80,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -46,8 +45,10 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
   },
   headerLeft: {
+    flex: 1,
     flexDirection: "column",
     alignItems: "flex-start",
+    paddingRight: 12,
   },
   companyName: {
     fontSize: 14,
@@ -60,6 +61,7 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
   headerCenter: {
+    flexShrink: 0,
     flexDirection: "column",
     alignItems: "center",
   },
@@ -70,8 +72,10 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   headerRight: {
+    flex: 1,
     flexDirection: "column",
     alignItems: "flex-end",
+    paddingLeft: 12,
   },
   invoiceNumberLabel: {
     fontSize: 10,
@@ -83,6 +87,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#FFFFFF",
     marginBottom: 5,
+    textAlign: "right",
   },
   dateLabel: {
     fontSize: 10,
@@ -172,9 +177,11 @@ const styles = StyleSheet.create({
   },
 
   // Table styles
-  table: {
-    marginBottom: 20,
-  },
+  // No bottom margin on the table: react-pdf counts a margin below an unbreakable-
+  // looking block as "presence" and, when the table starts a page and ends within
+  // that margin of the page bottom, it moves the table to a new page forever
+  // (infinite empty pages). The gap lives on the totals block instead (20 + 15).
+  table: {},
   tableHeader: {
     flexDirection: "row",
     backgroundColor: "#9ACD32",
@@ -245,6 +252,10 @@ const styles = StyleSheet.create({
     color: "#000000",
     textAlign: "center",
   },
+  // Gap between the text columns and the numeric columns
+  textCellGutter: {
+    paddingRight: 8,
+  },
 
   itemNameCell: {
     width: "45%",
@@ -304,10 +315,10 @@ const styles = StyleSheet.create({
   totalsContainer: {
     flexDirection: "row",
     justifyContent: "flex-end",
-    marginTop: 15,
+    marginTop: 35,
   },
   totalsSection: {
-    width: 250,
+    width: 280,
   },
   totalRow: {
     flexDirection: "row",
@@ -327,20 +338,22 @@ const styles = StyleSheet.create({
   grandTotalRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
     backgroundColor: "#9ACD32",
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    marginTop: 5,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    marginTop: 8,
   },
   grandTotalLabel: {
-    fontSize: 12,
+    fontSize: 20,
     color: "#000000",
-    fontWeight: "bold",
+    fontFamily: "Helvetica-Bold",
+    paddingRight: 10,
   },
   grandTotalValue: {
-    fontSize: 12,
+    fontSize: 24,
     color: "#000000",
-    fontWeight: "bold",
+    fontFamily: "Helvetica-Bold",
   },
 
   // Footer sections
@@ -381,11 +394,142 @@ const styles = StyleSheet.create({
     color: "#000000",
     textAlign: "center",
     marginTop: 85,
-    marginBottom: 20,
+    // No bottom margin: the page padding already provides it, and a margin here
+    // pushed the closing block onto a new page on otherwise-full single pages.
   },
 
-  // Bottom contact section
+  // Work partitions: each partition (header + rows + total) is drawn as an
+  // outlined box. The outline lives on the rows themselves (sides on every row,
+  // top on the header, bottom on the total) so a partition split across pages
+  // still looks clean on each page.
+  partitionGap: {
+    marginTop: 11,
+  },
+  partitionRow: {
+    flexDirection: "row",
+    backgroundColor: "#E6F2C8",
+    borderLeftWidth: 1,
+    borderLeftColor: "#4D7C0F",
+    borderTopWidth: 1,
+    borderTopColor: "#4D7C0F",
+    borderRightWidth: 1,
+    borderRightColor: "#4D7C0F",
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
+    paddingVertical: 8,
+    paddingLeft: 14,
+    paddingRight: 14,
+  },
+  partitionName: {
+    width: "100%",
+    fontSize: 11.5,
+    fontFamily: "Helvetica-Bold",
+    color: "#4D7C0F",
+  },
+  // Item rows inside a partition box: side borders, padding reduced by the
+  // border width so the columns stay aligned with the table header
+  boxSides: {
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderLeftColor: "#4D7C0F",
+    borderRightColor: "#4D7C0F",
+    paddingHorizontal: 14,
+  },
+  // Last item row of the ungrouped block (rows not in any partition): closes
+  // that block's box with a bottom border and rounded bottom corners
+  // First item row of an ungrouped block that follows a partition box: opens
+  // its own closed box (top border, rounded top corners)
+  boxTop: {
+    borderTopWidth: 1,
+    borderTopColor: "#4D7C0F",
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
+  },
+  boxBottom: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#4D7C0F",
+    borderBottomLeftRadius: 4,
+    borderBottomRightRadius: 4,
+  },
+  // The total's top line sits over the last item row's grey separator
+  // (marginTop -1), so exactly one straight accent line divides them.
+  partitionTotalRow: {
+    flexDirection: "row",
+    marginTop: -1,
+    borderTopWidth: 1.25,
+    borderTopColor: "#4D7C0F",
+    borderBottomWidth: 1,
+    borderBottomColor: "#4D7C0F",
+    borderBottomLeftRadius: 4,
+    borderBottomRightRadius: 4,
+    paddingVertical: 8,
+    backgroundColor: "#FFFFFF",
+  },
+  partitionTotalLabel: {
+    fontSize: 10,
+    fontFamily: "Helvetica-Bold",
+    color: "#4D7C0F",
+    textAlign: "right",
+    paddingRight: 8,
+  },
+  partitionTotalValue: {
+    fontSize: 10,
+    fontFamily: "Helvetica-Bold",
+    color: "#4D7C0F",
+    textAlign: "right",
+  },
+  // Item group row (has sub-items): a light neutral tint, softer than a partition header
+  groupRow: {
+    backgroundColor: "#EBEFE3",
+  },
+  partitionSummary: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+    paddingBottom: 3,
+    marginBottom: 3,
+  },
+  partitionSummaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 3,
+    paddingHorizontal: 15,
+  },
+  partitionSummaryLabel: {
+    fontSize: 10,
+    color: "#6B7280",
+    flexShrink: 1,
+    paddingRight: 8,
+  },
+  partitionSummaryValue: {
+    fontSize: 10,
+    color: "#4B5563",
+  },
+
+  // Payment button (the whole button is the link area)
+  payButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#9ACD32",
+    borderRadius: 5,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  payButtonText: {
+    fontSize: 10,
+    fontFamily: "Helvetica-Bold",
+    color: "#FFFFFF",
+    flexShrink: 1,
+  },
+  payButtonIcon: {
+    marginLeft: 7,
+  },
 });
+
+// Hyphenation is disabled app-wide (index.js), so react-pdf only wraps at spaces and a
+// long unbroken word would run into the next column. On this template's wrapping text,
+// allow very long words to break every few characters (react-pdf adds the hyphen).
+const breakLongWords = (word) =>
+  word.length > 18 ? word.match(/.{1,6}/g) : [word];
 
 // Green Classic Template Component
 const GreenClassicTemplate = ({ invoiceData }) => {
@@ -427,7 +571,11 @@ const GreenClassicTemplate = ({ invoiceData }) => {
   // Optional payment link
   const paymentUrl = normalizePaymentUrl(invoiceData.paymentLink);
   const paymentLinkText = getPaymentLinkText(invoiceData.paymentLinkText);
-  const hasCustomLinkText = Boolean(String(invoiceData.paymentLinkText || "").trim());
+
+  const hasFooter = Boolean(terms || notes || bankName || bankAccount || paymentUrl);
+  // Keep the closing block (footer + "Thank You") unsplit unless notes/terms are so
+  // long that the block could not fit on a single page.
+  const keepClosingTogether = String(terms || "").length + String(notes || "").length < 900;
 
   // Calculate totals
   const subtotal = calculateItemsSubtotal(items);
@@ -435,9 +583,192 @@ const GreenClassicTemplate = ({ invoiceData }) => {
   const discountAmount = (subtotal * (discountRate || 0)) / 100;
   const total = subtotal + taxAmount - discountAmount;
 
+  // Work partitions (empty when the invoice has none)
+  const partitionTotals = getPartitionTotals(items, invoiceData.partitions);
+  const hasPartitions = partitionTotals.length > 0;
   // Format currency
   const formatCurrency = (amount) => {
     return `$${(amount || 0).toFixed(2)}`;
+  };
+
+  // Table rows. Zebra striping restarts under each partition header (unchanged
+  // without partitions); rows inside a partition are drawn inside its box.
+  const rows = flattenInvoiceRows(items, invoiceData.partitions);
+  {
+    let stripe = -1;
+    let inPartition = false;
+    rows.forEach((row, index) => {
+      if (row.rowType === "partition") {
+        inPartition = true;
+        stripe = -1;
+      } else if (row.rowType === "partitionTotal") {
+        inPartition = false;
+      } else {
+        // Ungrouped rows right after a partition box start their own box:
+        // gap + top border, and the striping restarts like under a header
+        const prev = rows[index - 1];
+        row.opensBox = !inPartition && Boolean(prev && prev.rowType === "partitionTotal");
+        if (row.opensBox) stripe = -1;
+        stripe += 1;
+        row.stripe = stripe;
+        row.inBox = inPartition;
+        // Ungrouped rows form their own closed box: its last row draws the bottom
+        const after = rows[index + 1];
+        row.closesBox = !inPartition && (!after || after.rowType === "partition");
+      }
+    });
+  }
+
+  const renderRow = (item) => {
+    if (item.rowType === "partition") {
+      return (
+        <View key={item.key} wrap={false} style={styles.partitionRow}>
+          <Text style={styles.partitionName} hyphenationCallback={breakLongWords}>
+            {item.itemName}
+          </Text>
+        </View>
+      );
+    }
+    if (item.rowType === "partitionTotal") {
+      return (
+        <View key={item.key} wrap={false} style={[styles.partitionTotalRow, styles.boxSides]}>
+          <Text
+            style={[styles.partitionTotalLabel, { width: `${100 - totalColWidth}%` }]}
+            hyphenationCallback={breakLongWords}
+          >
+            {item.itemName}
+          </Text>
+          <Text style={[styles.partitionTotalValue, { width: `${totalColWidth}%` }]}>
+            {formatCurrency(item.amount)}
+          </Text>
+        </View>
+      );
+    }
+    const isSub = item.rowType === "sub";
+    const isGroup = item.rowType === "group";
+    const subCell = isSub ? subStyles.subCell : null;
+    return (
+      <View
+        key={item.key}
+        wrap={false}
+        style={[
+          styles.tableRow,
+          item.stripe % 2 === 1 ? styles.tableRowAlt : {},
+          isSub ? subStyles.subRow : {},
+          isGroup ? styles.groupRow : {},
+          styles.boxSides,
+          item.opensBox ? [styles.boxTop, styles.partitionGap] : {},
+          item.closesBox ? styles.boxBottom : {},
+        ]}
+      >
+        <Text
+          style={[
+            styles.tableCell,
+            includeDescription ? styles.itemNameCell : styles.itemNameCellWide,
+            growCol,
+            styles.textCellGutter,
+            isGroup ? subStyles.groupName : {},
+            isSub ? subStyles.subName : {},
+          ]}
+          hyphenationCallback={breakLongWords}
+        >
+          {isSub ? SUB_ITEM_BULLET : ""}
+          {item.itemName || "Item Name"}
+        </Text>
+        {includeDescription && (
+          <Text
+            style={[styles.tableCell, styles.descriptionCell, growCol, styles.textCellGutter, subCell || {}]}
+            hyphenationCallback={breakLongWords}
+          >
+            {item.description || ""}
+          </Text>
+        )}
+        {showQuantity && (
+          <Text
+            style={[
+              styles.tableCell,
+              includeDescription ? styles.qtyCell : styles.qtyCellWide,
+              subCell || {},
+            ]}
+          >
+            {isGroup || item.showQuantity === false ? "" : item.quantity || 1}
+          </Text>
+        )}
+        {showQuantity && (
+          <Text
+            style={[
+              styles.tableCell,
+              includeDescription ? styles.priceCell : styles.priceCellWide,
+              subCell || {},
+            ]}
+          >
+            {isGroup || item.showQuantity === false ? "" : formatCurrency(item.rate)}
+          </Text>
+        )}
+        <Text
+          style={[
+            styles.tableCell,
+            includeDescription ? styles.totalCell : styles.totalCellWide,
+            subCell || {},
+            isGroup ? subStyles.groupName : {},
+          ]}
+        >
+          {formatCurrency(item.amount)}
+        </Text>
+      </View>
+    );
+  };
+
+  // Keep-together blocks: a group row stays with its sub-items (all of them for
+  // normal-sized groups, only the first one for very long groups); a partition
+  // header travels with its first row/group; a partition total stays on the
+  // same page as the row above it.
+  const MAX_KEEP_TOGETHER = 12;
+  let rowBlocks = [];
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].rowType !== "group") {
+      rowBlocks.push([rows[i]]);
+      continue;
+    }
+    let j = i + 1;
+    while (j < rows.length && rows[j].rowType === "sub") j++;
+    const keep = j - i - 1 <= MAX_KEEP_TOGETHER ? j : Math.min(j, i + 2);
+    rowBlocks.push(rows.slice(i, keep));
+    for (let k = keep; k < j; k++) rowBlocks.push([rows[k]]);
+    i = j - 1;
+  }
+  {
+    const merged = [];
+    for (let b = 0; b < rowBlocks.length; b++) {
+      const block = rowBlocks[b];
+      const type = block[0].rowType;
+      const next = rowBlocks[b + 1];
+      if (type === "partition" && next && next[0].rowType !== "partitionTotal") {
+        merged.push([...block, ...next]);
+        b++;
+      } else if (type === "partitionTotal" && merged.length > 0) {
+        merged[merged.length - 1] = [...merged[merged.length - 1], ...block];
+      } else {
+        merged.push(block);
+      }
+    }
+    rowBlocks = merged;
+  }
+  // A block starting with a partition header opens a new box. The gap above it
+  // is a margin on that unbreakable block, so it moves with the box to a new
+  // page (same small gap under the repeated table header).
+  const renderBlock = (block) => {
+    const opensBox = block[0].rowType === "partition";
+    if (block.length === 1 && !opensBox) return renderRow(block[0]);
+    return (
+      <View
+        key={`blk-${block[0].key}`}
+        style={opensBox ? styles.partitionGap : undefined}
+        wrap={false}
+      >
+        {block.map(renderRow)}
+      </View>
+    );
   };
 
   return (
@@ -541,7 +872,7 @@ const GreenClassicTemplate = ({ invoiceData }) => {
         {/* Items Table */}
         <View style={styles.table}>
           {/* Table Header */}
-          <View style={styles.tableHeader}>
+          <View style={styles.tableHeader} fixed>
             <Text
               style={[
                 styles.tableHeaderCell,
@@ -592,82 +923,33 @@ const GreenClassicTemplate = ({ invoiceData }) => {
           </View>
 
           {/* Table Rows */}
-          {flattenInvoiceItems(items).map((item, index) => {
-            const isSub = item.rowType === "sub";
-            const isGroup = item.rowType === "group";
-            const subCell = isSub ? subStyles.subCell : null;
-            return (
-            <View
-              key={item.key}
-              wrap={false}
-              style={[
-                styles.tableRow,
-                index % 2 === 1 ? styles.tableRowAlt : {},
-                isSub ? subStyles.subRow : {},
-              ]}
-            >
-              <Text
-                style={[
-                  styles.tableCell,
-                  includeDescription
-                    ? styles.itemNameCell
-                    : styles.itemNameCellWide, growCol,
-                  isGroup ? subStyles.groupName : {},
-                  isSub ? subStyles.subName : {},
-                ]}
-              >
-                {isSub ? SUB_ITEM_BULLET : ""}
-                {item.itemName || "Item Name"}
-              </Text>
-              {includeDescription && (
-                <Text style={[styles.tableCell, styles.descriptionCell, growCol, subCell || {}]}>
-                  {item.description || ""}
-                </Text>
-              )}
-              {showQuantity && (
-                <Text
-                  style={[
-                    styles.tableCell,
-                    includeDescription ? styles.qtyCell : styles.qtyCellWide,
-                    subCell || {},
-                  ]}
-                >
-                  {isGroup || item.showQuantity === false ? "" : item.quantity || 1}
-                </Text>
-              )}
-              {showQuantity && (
-                <Text
-                  style={[
-                    styles.tableCell,
-                    includeDescription ? styles.priceCell : styles.priceCellWide,
-                    subCell || {},
-                  ]}
-                >
-                  {isGroup || item.showQuantity === false ? "" : formatCurrency(item.rate)}
-                </Text>
-              )}
-              <Text
-                style={[
-                  styles.tableCell,
-                  includeDescription ? styles.totalCell : styles.totalCellWide,
-                  subCell || {},
-                  isGroup ? subStyles.groupName : {},
-                ]}
-              >
-                {formatCurrency(item.amount)}
-              </Text>
-            </View>
-            );
-          })}
+          {rowBlocks.map(renderBlock)}
         </View>
 
         {/* Totals Section */}
-        <View style={styles.totalsContainer}>
+        {/* With no footer, the totals travel with "Thank You" so it never sits alone on a page */}
+        <View wrap={!(keepClosingTogether && !hasFooter)}>
+        <View style={styles.totalsContainer} wrap={false}>
           <View style={styles.totalsSection}>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Subtotal</Text>
-              <Text style={styles.totalValue}>{formatCurrency(subtotal)}</Text>
-            </View>
+            {hasPartitions && (
+              <View style={styles.partitionSummary}>
+                {partitionTotals.map((p) => (
+                  <View key={p.id} style={styles.partitionSummaryRow}>
+                    <Text style={styles.partitionSummaryLabel} hyphenationCallback={breakLongWords}>
+                      {p.name || "Untitled partition"}
+                    </Text>
+                    <Text style={styles.partitionSummaryValue}>{formatCurrency(p.total)}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+            {/* Sub Total only when tax/discount make it differ from the Total */}
+            {(taxRate > 0 || discountRate > 0) && (
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Subtotal</Text>
+                <Text style={styles.totalValue}>{formatCurrency(subtotal)}</Text>
+              </View>
+            )}
             {taxRate > 0 && (
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>Taxes ({taxRate}%)</Text>
@@ -695,15 +977,19 @@ const GreenClassicTemplate = ({ invoiceData }) => {
           </View>
         </View>
 
-        {/* Footer Section */}
-        {(terms || notes || bankName || bankAccount || paymentUrl) && (
+        {!hasFooter && <Text style={styles.thankYouText}>Thank You</Text>}
+        </View>
+
+        {/* Footer Section + Thank You kept on one page (when short enough to fit) */}
+        {hasFooter && (
+        <View wrap={!keepClosingTogether}>
           <View style={styles.footerSection}>
             {(terms || notes) && (
               <View style={styles.termsSection}>
                 {terms && (
                   <>
                     <Text style={styles.footerTitle}>Term & Condition</Text>
-                    <Text style={styles.footerText}>{terms}</Text>
+                    <Text style={styles.footerText} hyphenationCallback={breakLongWords}>{terms}</Text>
                   </>
                 )}
                 {notes && (
@@ -716,7 +1002,7 @@ const GreenClassicTemplate = ({ invoiceData }) => {
                     >
                       Notes
                     </Text>
-                    <Text style={styles.footerText}>{notes}</Text>
+                    <Text style={styles.footerText} hyphenationCallback={breakLongWords}>{notes}</Text>
                   </>
                 )}
               </View>
@@ -734,37 +1020,32 @@ const GreenClassicTemplate = ({ invoiceData }) => {
                 )}
                 {paymentUrl && (
                   <View style={{ marginTop: 6, alignItems: "flex-end" }}>
-                    <Link
-                      src={paymentUrl}
-                      style={[
-                        styles.footerText,
-                        {
-                          color: "#4D7C0F",
-                          textDecoration: "underline",
-                          fontFamily: "Helvetica-Bold",
-                        },
-                      ]}
-                    >
-                      {paymentLinkText} »
+                    <Link src={paymentUrl} style={{ textDecoration: "none" }}>
+                      <View style={styles.payButton}>
+                        <Text style={styles.payButtonText}>{paymentLinkText}</Text>
+                        <Svg width={10} height={10} viewBox="0 0 10 10" style={styles.payButtonIcon}>
+                          <Line x1="1" y1="5" x2="8.5" y2="5" stroke="#FFFFFF" strokeWidth={1.6} strokeLinecap="round" />
+                          <Polyline
+                            points="5.5,2 8.5,5 5.5,8"
+                            fill="none"
+                            stroke="#FFFFFF"
+                            strokeWidth={1.6}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </Svg>
+                      </View>
                     </Link>
-                    {/* Show the raw URL only when no custom link text was given */}
-                    {!hasCustomLinkText && (
-                      <Link
-                        src={paymentUrl}
-                        style={[styles.footerText, { color: "#6B7280", fontSize: 8, textDecoration: "none" }]}
-                      >
-                        {displayUrl(paymentUrl)}
-                      </Link>
-                    )}
                   </View>
                 )}
               </View>
             )}
           </View>
-        )}
 
-        {/* Thank You Message */}
-        <Text style={styles.thankYouText}>Thank You</Text>
+          {/* Thank You Message */}
+          <Text style={styles.thankYouText}>Thank You</Text>
+        </View>
+        )}
       </Page>
     </Document>
   );

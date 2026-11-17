@@ -19,11 +19,12 @@ import { Badge } from "@/components/ui/badge";
 import { X, Users, Globe, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
-import { useClients } from "@/contexts/ClientContext";
+import { useAllClients } from "@/contexts/ClientContext";
 import ItemList from "./item-list";
 
 export default function ItemManagement() {
-  const { clients, loading: clientsLoading } = useClients();
+  // Every client, not just the pages loaded in the sidebar
+  const { clients, loading: clientsLoading } = useAllClients();
   const router = useRouter();
   const [selectedClients, setSelectedClients] = useState([]);
   const [showAllClients, setShowAllClients] = useState(false);

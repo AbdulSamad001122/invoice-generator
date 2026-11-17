@@ -7,16 +7,16 @@ import { applyRateLimit, createRateLimitResponse } from "@/lib/rateLimiter";
 // GET /api/items/client/[clientId] - Get items available for a specific client
 export async function GET(request, { params }) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'read');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'read', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     const user = await getCachedUser(userId);

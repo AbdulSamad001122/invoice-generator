@@ -6,6 +6,11 @@
 //   mistaken for the full list.
 // - useInvoices(): actions (create, update, status, duplicate, delete...) that
 //   keep every cached list in sync and refresh them in the background.
+//
+// Lists load PAGE_SIZE invoices at a time (more arrive as the user scrolls).
+// Refetching an infinite query re-requests every loaded page one after another,
+// so before a list is refreshed it is trimmed back to its first page: one
+// request instead of N, and the list grows again as the user scrolls.
 
 import React, { createContext, useCallback, useContext, useMemo } from "react";
 import axios from "axios";
@@ -14,7 +19,9 @@ import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys, normalizeInvoiceFilters } from "@/lib/queryKeys";
 
 const InvoiceContext = createContext(null);
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 5;
+// Lists stay fresh for 5 minutes; the actions below keep them in sync meanwhile.
+const LIST_STALE_TIME = 5 * 60 * 1000;
 
 // ---------- cache helpers (data shape: { pages: [{ invoices, pagination }], pageParams })
 
@@ -43,13 +50,49 @@ function isUnfiltered(queryKey) {
   return !f.search && !f.date && !f.status;
 }
 
-async function fetchInvoicePage({ clientId, filters, page }) {
+function isStatusFiltered(queryKey) {
+  return Boolean(queryKey[2]?.status);
+}
+
+// Keep only the first page, so a refetch costs one request instead of one per loaded page
+function trimToFirstPage(data) {
+  if (!data?.pages || data.pages.length <= 1) return data;
+  return {
+    ...data,
+    pages: data.pages.slice(0, 1),
+    pageParams: (data.pageParams || []).slice(0, 1),
+  };
+}
+
+// Trim matching invoice lists to their first page. Keeps each query's
+// dataUpdatedAt, so trimming never makes stale data look fresh.
+function trimInvoiceQueries(queryClient, filters, { skipFetching = false } = {}) {
+  for (const query of queryClient.getQueryCache().findAll(filters)) {
+    if (skipFetching && query.state.fetchStatus === "fetching") continue;
+    const data = query.state.data;
+    if (!data?.pages || data.pages.length <= 1) continue;
+    queryClient.setQueryData(query.queryKey, trimToFirstPage(data), {
+      updatedAt: query.state.dataUpdatedAt,
+    });
+  }
+}
+
+// Called when leaving a client's page: the next visit (or background refresh)
+// then fetches one page, not every page scrolled through. Queries still
+// fetching are left alone so an in-flight response isn't mixed with trimmed data.
+export function trimClientInvoicePages(queryClient, clientId) {
+  if (!clientId) return;
+  trimInvoiceQueries(queryClient, { queryKey: queryKeys.invoicesForClient(clientId) }, { skipFetching: true });
+}
+
+async function fetchInvoicePage({ clientId, filters, page, signal }) {
   const params = new URLSearchParams({ clientId, page: String(page), limit: String(PAGE_SIZE) });
   if (filters.search) params.append("search", filters.search);
   if (filters.date) params.append("date", filters.date);
   if (filters.status) params.append("status", filters.status);
-  const res = await axios.get(`/api/invoices?${params.toString()}`);
-  return res.data; // { invoices, pagination }
+  // The signal aborts the request when the query is cancelled (e.g. the filter changed)
+  const res = await axios.get(`/api/invoices?${params.toString()}`, { signal });
+  return res.data; // { invoices, pagination: { page, limit, hasMore, totalCount? (page 1 only) } }
 }
 
 // One definition of the invoice list query, shared by the hook and the hover
@@ -59,9 +102,10 @@ function invoiceListOptions(clientId, filters) {
   return {
     queryKey: queryKeys.invoices(clientId, filters),
     initialPageParam: 1,
-    queryFn: ({ pageParam }) => fetchInvoicePage({ clientId, filters, page: pageParam }),
+    queryFn: ({ pageParam, signal }) => fetchInvoicePage({ clientId, filters, page: pageParam, signal }),
     getNextPageParam: (lastPage) =>
       lastPage?.pagination?.hasMore ? lastPage.pagination.page + 1 : undefined,
+    staleTime: LIST_STALE_TIME,
   };
 }
 
@@ -94,7 +138,16 @@ export function useClientInvoices(clientId, filters) {
     return list;
   }, [pages]);
 
+  // Only page 1 carries totalCount (the server counts once, on the first page)
   const totalCount = pages?.[0]?.pagination?.totalCount;
+
+  const { hasNextPage, isFetching, isPlaceholderData, fetchNextPage } = query;
+  // Stable between renders, so effects and observers depending on it don't re-run.
+  // Not while any fetch runs: fetchNextPage would cancel a refresh in progress,
+  // and placeholder rows belong to the previous filter.
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetching && !isPlaceholderData) fetchNextPage();
+  }, [hasNextPage, isFetching, isPlaceholderData, fetchNextPage]);
 
   return {
     invoices,
@@ -106,20 +159,19 @@ export function useClientInvoices(clientId, filters) {
     isPlaceholder: query.isPlaceholderData,
     isLoadingMore: query.isFetchingNextPage,
     hasMore: Boolean(query.hasNextPage),
-    loadMore: () => {
-      if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage();
-    },
-    error: query.error,
+    loadMore,
+    // Loading the next page failed: auto-loading stops until the user retries
+    isLoadMoreError: query.isFetchNextPageError,
+    // Only a failed first load replaces the list with an error
+    error: query.isFetchNextPageError ? null : query.error,
     refetch: query.refetch,
   };
 }
 
 // Warm the cache for a client (e.g. when hovering it in the sidebar)
+// Same options (incl. staleTime) as the list hook: no request while the cached list is fresh.
 export function prefetchClientInvoices(queryClient, clientId) {
-  return queryClient.prefetchInfiniteQuery({
-    ...invoiceListOptions(clientId, normalizeInvoiceFilters()),
-    staleTime: 60 * 1000, // no request if the cached list is still fresh
-  });
+  return queryClient.prefetchInfiniteQuery(invoiceListOptions(clientId, normalizeInvoiceFilters()));
 }
 
 // ---------- actions
@@ -127,13 +179,26 @@ export function prefetchClientInvoices(queryClient, clientId) {
 export function InvoiceProvider({ children }) {
   const queryClient = useQueryClient();
 
-  const invalidateClient = useCallback(
-    (clientId) => queryClient.invalidateQueries({ queryKey: queryKeys.invoicesForClient(clientId) }),
-    [queryClient]
-  );
+  // Refresh every list for a client (trimmed first, so each refetch is one request)
+  const invalidateClient = useCallback((clientId) => {
+    const filters = { queryKey: queryKeys.invoicesForClient(clientId) };
+    trimInvoiceQueries(queryClient, filters);
+    return queryClient.invalidateQueries(filters);
+  }, [queryClient]);
+
+  // Refresh only the client's lists whose key matches `predicate`, trimmed first
+  const invalidateWhere = useCallback((clientId, predicate) => {
+    const filters = {
+      queryKey: queryKeys.invoicesForClient(clientId),
+      predicate: (q) => predicate(q.queryKey),
+    };
+    trimInvoiceQueries(queryClient, filters);
+    return queryClient.invalidateQueries(filters);
+  }, [queryClient]);
 
   // Add a new invoice to the top of the client's unfiltered list, then refresh
   const prependInvoice = useCallback((clientId, invoice) => {
+    trimInvoiceQueries(queryClient, { queryKey: queryKeys.invoicesForClient(clientId) });
     queryClient.setQueriesData({ queryKey: queryKeys.invoicesForClient(clientId) }, (data) => {
       if (!data?.pages) return data;
       const already = data.pages.some((p) => (p.invoices || []).some((x) => x.id === invoice.id));
@@ -171,13 +236,16 @@ export function InvoiceProvider({ children }) {
   const updateInvoice = useCallback(async (invoiceId, updated) => {
     const invoice = updated?.invoice || updated;
     if (invoice?.clientId) {
+      // The saved invoice is already in hand, so patch it everywhere. Its place
+      // in the unfiltered list (newest created first) can't change; only
+      // filtered lists, which may gain or lose it, are refetched.
       replaceInvoice(invoice.clientId, invoiceId, invoice);
-      invalidateClient(invoice.clientId);
+      invalidateWhere(invoice.clientId, (key) => !isUnfiltered(key));
     } else {
       queryClient.invalidateQueries({ queryKey: queryKeys.allInvoices });
     }
     return invoice;
-  }, [replaceInvoice, invalidateClient, queryClient]);
+  }, [replaceInvoice, invalidateWhere, queryClient]);
 
   const updateInvoiceStatus = useCallback(async (invoiceId, status, clientId) => {
     const key = { queryKey: queryKeys.invoicesForClient(clientId) };
@@ -198,19 +266,22 @@ export function InvoiceProvider({ children }) {
       );
     setStatus(status);
 
+    let saved;
     try {
       const response = await axios.patch(`/api/invoices?id=${invoiceId}`, { status });
-      const saved = response.data.invoice;
-      if (saved) replaceInvoice(clientId, invoiceId, saved);
-      return saved;
+      saved = response.data.invoice;
     } catch (err) {
+      // Undo the optimistic change, then settle to the server's data
       if (previousStatus !== undefined) setStatus(previousStatus);
-      throw err;
-    } finally {
-      // Settle to the server's data (and refresh lists filtered by status)
       invalidateClient(clientId);
+      throw err;
     }
-  }, [queryClient, replaceInvoice, invalidateClient]);
+    if (saved) replaceInvoice(clientId, invoiceId, saved);
+    // Only lists filtered by status can gain or lose this invoice; the others
+    // already show the new status, so they are not refetched.
+    invalidateWhere(clientId, isStatusFiltered);
+    return saved;
+  }, [queryClient, replaceInvoice, invalidateClient, invalidateWhere]);
 
   const duplicateInvoice = useCallback(async (invoiceId, clientId) => {
     const response = await axios.post(`/api/invoices/duplicate`, { invoiceId });
@@ -222,6 +293,7 @@ export function InvoiceProvider({ children }) {
   const deleteInvoice = useCallback(async (invoiceId, clientId) => {
     await axios.delete(`/api/invoices?id=${invoiceId}`);
     // Remove it now, then refetch (the server renumbers the remaining invoices)
+    trimInvoiceQueries(queryClient, { queryKey: queryKeys.invoicesForClient(clientId) });
     queryClient.setQueriesData({ queryKey: queryKeys.invoicesForClient(clientId) }, (data) =>
       adjustTotal(
         mapInvoicePages(data, (page) => ({
@@ -236,6 +308,7 @@ export function InvoiceProvider({ children }) {
 
   const deleteAllInvoices = useCallback(async (clientId) => {
     await axios.delete(`/api/invoices/bulk?clientId=${clientId}`);
+    trimInvoiceQueries(queryClient, { queryKey: queryKeys.invoicesForClient(clientId) });
     queryClient.setQueriesData({ queryKey: queryKeys.invoicesForClient(clientId) }, (data) =>
       mapInvoicePages(data, (page) => ({
         ...page,

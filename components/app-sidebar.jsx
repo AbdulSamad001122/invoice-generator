@@ -1,11 +1,18 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useRouter, usePathname } from "next/navigation";
-import { useClients } from "@/contexts/ClientContext";
-import { useInvoices, prefetchClientInvoices } from "@/contexts/InvoiceContext";
-import { useQueryClient } from "@tanstack/react-query";
+import {
+  useClients,
+  fetchClientsPage,
+  getNextClientsPageParam,
+  CLIENT_PAGE_SIZE,
+} from "@/contexts/ClientContext";
+import { prefetchClientInvoices } from "@/contexts/InvoiceContext";
+import { useInfiniteQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
+import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
 import {
   Sidebar,
   SidebarContent,
@@ -58,6 +65,10 @@ import {
 import { useToast } from "@/contexts/ToastContext";
 import axios from "axios";
 import { Spinner } from "@/components/ui/spinner";
+import { CLIENT_RESELECT_EVENT } from "@/lib/events";
+
+const SEARCH_DEBOUNCE_MS = 300;
+const MAX_SEARCH_LENGTH = 100; // matches the server's limit
 
 export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
   const { isSignedIn } = useUser();
@@ -68,14 +79,14 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
     clients,
     loading,
     loadingMore,
+    loadMoreError,
+    refreshing,
     pagination,
     addClient,
     updateClient,
     deleteClient,
-    refreshClients,
     loadMoreClients,
   } = useClients();
-  const { refreshInvoices } = useInvoices();
   const queryClient = useQueryClient();
   const clientsContainerRef = useRef(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -90,6 +101,76 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [clientToDelete, setClientToDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  // Search on the server once typing pauses (the loaded list may not hold every client)
+  useEffect(() => {
+    const id = setTimeout(
+      () => setDebouncedSearch(searchQuery.trim().slice(0, MAX_SEARCH_LENGTH)),
+      SEARCH_DEBOUNCE_MS
+    );
+    return () => clearTimeout(id);
+  }, [searchQuery]);
+
+  // Sidebar-only search results, PAGE_SIZE at a time. Kept apart from the
+  // shared client list, which is never keyed on a search term.
+  const searchResultsQuery = useInfiniteQuery({
+    queryKey: queryKeys.clientSearch(debouncedSearch),
+    queryFn: ({ pageParam, signal }) =>
+      fetchClientsPage({ page: pageParam, search: debouncedSearch, signal }),
+    initialPageParam: 1,
+    getNextPageParam: getNextClientsPageParam,
+    enabled: Boolean(isSignedIn) && debouncedSearch !== "",
+    // Keep the previous term's results on screen while the next one loads
+    placeholderData: keepPreviousData,
+  });
+
+  const searchPages = searchResultsQuery.data?.pages;
+  const searchResults = useMemo(() => {
+    const seen = new Set();
+    const list = [];
+    for (const page of searchPages || []) {
+      for (const client of page.clients || []) {
+        if (!seen.has(client.id)) {
+          seen.add(client.id);
+          list.push(client);
+        }
+      }
+    }
+    return list;
+  }, [searchPages]);
+
+  const {
+    hasNextPage: searchHasMore,
+    isFetching: searchFetching,
+    isFetchingNextPage: searchLoadingMore,
+    isPlaceholderData: searchIsPlaceholder,
+    isFetchNextPageError: searchLoadMoreError,
+    fetchNextPage: fetchNextSearchPage,
+  } = searchResultsQuery;
+  const loadMoreSearchResults = useCallback(() => {
+    // Not while a fetch runs: fetchNextPage would cancel it
+    if (searchHasMore && !searchFetching && !searchIsPlaceholder) fetchNextSearchPage();
+  }, [searchHasMore, searchFetching, searchIsPlaceholder, fetchNextSearchPage]);
+
+  const isSearching = searchQuery.trim() !== "";
+  // Server results for a search term (possibly the previous term while the new one loads)
+  const showServerResults = isSearching && debouncedSearch !== "" && searchPages !== undefined;
+  const searchPending = isSearching && (!showServerResults || searchFetching) && !searchLoadingMore;
+
+  // Load more when the end of the list scrolls into view (inside the sidebar's
+  // own scroll area). Only while more exist and nothing is loading: no loops.
+  const sentinelRef = useInfiniteScroll({
+    rootRef: clientsContainerRef,
+    // The sidebar's scroll area is short: with the default 200px look-ahead it
+    // would fetch the next page right away even if the list is never scrolled.
+    rootMargin: "40px",
+    enabled: showServerResults
+      ? searchHasMore && !searchFetching && !searchIsPlaceholder && !searchLoadMoreError
+      : !isSearching && pagination.hasMore && !loading && !loadingMore && !refreshing && !loadMoreError,
+    loading: showServerResults ? searchFetching : loadingMore || refreshing,
+    onLoadMore: showServerResults ? loadMoreSearchResults : loadMoreClients,
+  });
 
   const handleCreateClient = async (e) => {
     e.preventDefault();
@@ -148,11 +229,7 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
         },
         updateOption
       );
-
-      // If updating all invoices, refresh invoice data to show updated client info
-      if (updateOption === "allInvoices") {
-        refreshInvoices(editingClient.id);
-      }
+      // ("All invoices" refreshes that client's invoice lists inside updateClient)
 
       // Reset form and close dialog
       setEditForm({ name: "", email: "" });
@@ -196,13 +273,29 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
     setEditForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  // Filter clients based on search query
-  const filteredClients = clients.filter(
-    (client) =>
-      client.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (client.email &&
-        client.email.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  // While searching: the server's results; until the first ones arrive, the
+  // loaded clients that match, so typing gives instant feedback.
+  const lowerQuery = searchQuery.trim().toLowerCase();
+  const filteredClients = !isSearching
+    ? clients
+    : showServerResults
+      ? // Results may still be for the previous term (debounce / loading): keep
+        // only those that match what's typed now, so nothing looks falsely matched.
+        debouncedSearch === searchQuery.trim() && !searchIsPlaceholder
+        ? searchResults
+        : searchResults.filter(
+            (client) =>
+              client.name.toLowerCase().includes(lowerQuery) ||
+              (client.email && client.email.toLowerCase().includes(lowerQuery))
+          )
+      : clients.filter(
+          (client) =>
+            client.name.toLowerCase().includes(lowerQuery) ||
+            (client.email && client.email.toLowerCase().includes(lowerQuery))
+        );
+  const showMore = showServerResults ? searchHasMore : !isSearching && pagination.hasMore;
+  const showMoreLoading = showServerResults ? searchLoadingMore : loadingMore;
+  const showMoreFailed = showServerResults ? searchLoadMoreError : loadMoreError;
 
   const activeClientId =
     selectedClientId ||
@@ -346,30 +439,25 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
               />
             </div>
 
-            <div
-              ref={clientsContainerRef}
-              className="min-h-0 flex-1 overflow-y-auto"
-              onScroll={(e) => {
-                const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-                if (scrollHeight - scrollTop <= clientHeight + 50 && !loadingMore && pagination.hasMore) {
-                  loadMoreClients();
-                }
-              }}
-            >
+            <div ref={clientsContainerRef} className="min-h-0 flex-1 overflow-y-auto">
               <SidebarMenu>
-                {loading ? (
+                {loading && !showServerResults ? (
                   Array.from({ length: 5 }).map((_, i) => (
                     <SidebarMenuItem key={i}>
                       <SidebarMenuSkeleton showIcon />
                     </SidebarMenuItem>
                   ))
-                ) : clients.length === 0 ? (
+                ) : clients.length === 0 && !isSearching ? (
                   <div className="px-3 py-8 text-center">
                     <Users className="mx-auto mb-2 size-6 text-muted-foreground" />
                     <p className="text-sm font-medium">No clients yet</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       Use the + button to add your first client.
                     </p>
+                  </div>
+                ) : filteredClients.length === 0 && searchPending ? (
+                  <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+                    <Spinner className="size-4" /> Searching…
                   </div>
                 ) : filteredClients.length === 0 ? (
                   <div className="px-3 py-8 text-center">
@@ -387,11 +475,20 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
                         <SidebarMenuButton
                           asChild
                           isActive={isActive}
-                          className="h-auto py-2"
+                          className="h-auto py-2 pr-9"
                         >
                           <Link
                             href={`/dashboard/${client.id}`}
-                            onClick={() => onClientSelect && onClientSelect(client)}
+                            onClick={() => {
+                              onClientSelect && onClientSelect(client);
+                              // Already on this client's page (e.g. inside an invoice form)?
+                              // The route won't change, so ask the page to show the invoice list.
+                              if (pathname === `/dashboard/${client.id}`) {
+                                window.dispatchEvent(
+                                  new CustomEvent(CLIENT_RESELECT_EVENT, { detail: client.id })
+                                );
+                              }
+                            }}
                             // Start loading this client's invoices before the click
                             onMouseEnter={() => prefetchClientInvoices(queryClient, client.id)}
                             onFocus={() => prefetchClientInvoices(queryClient, client.id)}
@@ -417,7 +514,12 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
                         </SidebarMenuButton>
                         <DropdownMenu modal={false}>
                           <DropdownMenuTrigger asChild>
-                            <SidebarMenuAction showOnHover aria-label={`Actions for ${client.name}`}>
+                            <SidebarMenuAction
+                              showOnHover
+                              aria-label={`Actions for ${client.name}`}
+                              // Centre on the two-line row (the default sits near the top)
+                              className="top-1/2! right-2 size-6 -translate-y-1/2"
+                            >
                               <MoreHorizontal />
                             </SidebarMenuAction>
                           </DropdownMenuTrigger>
@@ -439,24 +541,36 @@ export function AppSidebar({ selectedClientId, onClientSelect, onAddClient }) {
                   })
                 )}
 
-                {loadingMore ? (
+                {/* Scrolling this into view loads the next clients */}
+                {showMore && !loading && (
+                  <li ref={sentinelRef} aria-hidden="true" className="h-px list-none" />
+                )}
+
+                {showMoreLoading ? (
                   <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
                     <Spinner className="size-4" /> Loading more…
                   </div>
                 ) : (
-                  // Scrolling also loads more, but a short list never scrolls
-                  pagination.hasMore && !loading && (
+                  // Fallback (and retry after a failed page) for when auto-loading can't run
+                  showMore && !loading && (
                     <div className="px-2 py-2">
                       <Button
                         variant="ghost"
                         size="sm"
                         className="w-full text-muted-foreground"
-                        onClick={loadMoreClients}
+                        onClick={showServerResults ? loadMoreSearchResults : loadMoreClients}
                       >
-                        Show more clients
+                        {showMoreFailed ? "Retry loading clients" : "Show more clients"}
                       </Button>
                     </div>
                   )
+                )}
+
+                {/* Paging finished (only when the list actually paged) */}
+                {!showMore && !showMoreLoading && !loading && filteredClients.length > CLIENT_PAGE_SIZE && (
+                  <li className="list-none px-2 py-2 text-center text-[11px] text-muted-foreground">
+                    {isSearching ? "All matching clients loaded" : "All clients loaded"}
+                  </li>
                 )}
               </SidebarMenu>
             </div>

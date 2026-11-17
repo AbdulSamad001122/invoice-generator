@@ -1,12 +1,13 @@
 import React from "react";
 import {
-  flattenInvoiceItems,
+  flattenInvoiceRows,
+  getPartitionTotals,
   anyLineShowsQuantity,
   calculateItemsSubtotal,
   subItemPdfStyles as subStyles,
   SUB_ITEM_BULLET,
 } from "../invoiceItems";
-import { normalizePaymentUrl, getPaymentLinkText, displayUrl } from "../paymentLink";
+import { normalizePaymentUrl, getPaymentLinkText } from "../paymentLink";
 import {
   Document,
   Page,
@@ -15,6 +16,8 @@ import {
   StyleSheet,
   Image,
   Link,
+  Svg,
+  Path,
 } from "@react-pdf/renderer";
 
 // Create styles for Blue Modern Template
@@ -121,8 +124,9 @@ const styles = StyleSheet.create({
   },
   text: {
     fontSize: 10,
+    lineHeight: 1.3,
     color: "#6B7280",
-    marginBottom: 2,
+    marginBottom: 1,
   },
   dateSection: {
     flexDirection: "row",
@@ -144,9 +148,9 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   // Table styles
-  table: {
-    marginBottom: 15,
-  },
+  // No bottom margin here: react-pdf pushes the whole table to the next page when
+  // the last row fits but the margin does not. The gap lives on the totals instead.
+  table: {},
   tableHeader: {
     flexDirection: "row",
     backgroundColor: "#1E40AF",
@@ -158,6 +162,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "bold",
     textAlign: "center",
+    paddingHorizontal: 2,
   },
   itemNameHeader: {
     width: "25%",
@@ -200,8 +205,10 @@ const styles = StyleSheet.create({
   },
   tableCell: {
     fontSize: 9,
+    lineHeight: 1.35,
     color: "#374151",
     textAlign: "center",
+    paddingHorizontal: 2,
   },
   itemNameCell: {
     width: "25%",
@@ -235,14 +242,148 @@ const styles = StyleSheet.create({
     width: "16.66%",
     textAlign: "right",
   },
+  // Work partitions: a tinted header row and a subtotal row
+  partitionHeaderRow: {
+    flexDirection: "row",
+    backgroundColor: "#DBEAFE",
+    borderLeftWidth: 1,
+    borderLeftColor: "#1E40AF",
+    // Rounded top corners of the partition box
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
+    paddingVertical: 6,
+    paddingLeft: 9,
+    paddingRight: 10,
+  },
+  // Each partition (header + rows + total) is drawn as an outlined box. The
+  // outline lives on the rows themselves (sides on every row, top on the header,
+  // bottom on the total) so a partition split across pages stays clean.
+  partitionGap: {
+    marginTop: 11,
+  },
+  boxSides: {
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderLeftColor: "#1E40AF",
+    borderRightColor: "#1E40AF",
+    paddingLeft: 9,
+    paddingRight: 9,
+  },
+  boxHeader: {
+    borderTopWidth: 1,
+    borderTopColor: "#1E40AF",
+    borderRightWidth: 1,
+    borderRightColor: "#1E40AF",
+    paddingRight: 9,
+  },
+  // Rows outside any partition (ungrouped rows, or every row of an invoice
+  // without partitions) are closed on both sides too; the last row of such a
+  // run closes the box with a bottom border in the same colour.
+  boxTop: {
+    borderTopWidth: 1,
+    borderTopColor: "#1E40AF",
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
+  },
+  boxBottom: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#1E40AF",
+    borderBottomLeftRadius: 4,
+    borderBottomRightRadius: 4,
+  },
+  partitionHeaderText: {
+    fontSize: 11,
+    fontFamily: "Helvetica-Bold",
+    color: "#1E40AF",
+    paddingHorizontal: 2,
+  },
+  partitionTotalRow: {
+    flexDirection: "row",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    // Sit 1pt higher so the solid top line covers the grey separator of the row
+    // above: exactly one line between the last item and the total, while that
+    // row keeps a normal bottom border (zeroing it made its side borders render
+    // heavier than the other rows').
+    marginTop: -1,
+  },
+  // Straight top line of the partition total row, drawn as its own bar so it
+  // meets both box sides squarely (the row itself has rounded bottom corners)
+  partitionTotalLine: {
+    position: "absolute",
+    top: 0,
+    left: -1,
+    right: -1,
+    height: 1.25,
+    backgroundColor: "#1E40AF",
+  },
+  partitionTotalText: {
+    fontSize: 9,
+    fontFamily: "Helvetica-Bold",
+    color: "#1E40AF",
+    textAlign: "right",
+    paddingHorizontal: 2,
+  },
+  // Item group row (has sub-items): a light tint, softer than a partition header
+  groupRow: {
+    backgroundColor: "#EAF1FD",
+  },
+  // Partition lines in the totals area (lighter than the Sub Total line)
+  partitionSummaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 2,
+  },
+  partitionSummaryLabel: {
+    flex: 1,
+    paddingRight: 8,
+    fontSize: 9,
+    color: "#6B7280",
+  },
+  partitionSummaryValue: {
+    fontSize: 9,
+    color: "#6B7280",
+  },
+  partitionSummaryDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+    marginTop: 3,
+    marginBottom: 3,
+  },
+  // Payment button
+  payButtonLink: {
+    textDecoration: "none",
+  },
+  payButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1E40AF",
+    borderRadius: 5,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  payButtonText: {
+    color: "#FFFFFF",
+    fontFamily: "Helvetica-Bold",
+    fontSize: 10,
+  },
+  payButtonIcon: {
+    marginLeft: 6,
+  },
+  payUrlText: {
+    marginTop: 4,
+    fontSize: 8,
+    color: "#6B7280",
+    textDecoration: "none",
+  },
   // Totals section
   totalsContainer: {
     flexDirection: "row",
     justifyContent: "flex-end",
-    marginTop: 10,
+    marginTop: 25,
   },
   totalsSection: {
-    width: 200,
+    width: 270,
   },
   totalRow: {
     flexDirection: "row",
@@ -261,20 +402,22 @@ const styles = StyleSheet.create({
   grandTotalRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
     backgroundColor: "#1E40AF",
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    marginTop: 5,
+    borderRadius: 4,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    marginTop: 8,
   },
   grandTotalLabel: {
-    fontSize: 12,
+    fontSize: 20,
     color: "#FFFFFF",
-    fontWeight: "bold",
+    fontFamily: "Helvetica-Bold",
   },
   grandTotalValue: {
-    fontSize: 12,
+    fontSize: 24,
     color: "#FFFFFF",
-    fontWeight: "bold",
+    fontFamily: "Helvetica-Bold",
   },
   // Footer sections
   footerSection: {
@@ -386,13 +529,186 @@ const BlueModernTemplate = ({ invoiceData }) => {
   // Optional payment link
   const paymentUrl = normalizePaymentUrl(invoiceData.paymentLink);
   const paymentLinkText = getPaymentLinkText(invoiceData.paymentLinkText);
-  const hasCustomLinkText = Boolean(String(invoiceData.paymentLinkText || "").trim());
 
   // Calculate totals
   const subtotal = calculateItemsSubtotal(items);
   const taxAmount = (subtotal * (taxRate || 0)) / 100;
   const discountAmount = (subtotal * (discountRate || 0)) / 100;
   const total = subtotal + taxAmount - discountAmount;
+  const partitionTotals = getPartitionTotals(items, invoiceData.partitions);
+
+  // Table rows. A group row is kept on the same page as its sub-items (all of
+  // them for normal-sized groups, only the first one for very long groups) so
+  // a group heading is never left alone at the bottom of a page.
+  const renderRow = (item) => {
+    if (item.rowType === "partition") {
+      return (
+        <View style={[styles.partitionHeaderRow, styles.boxHeader]} key={item.key} wrap={false}>
+          <Text style={styles.partitionHeaderText}>{item.itemName}</Text>
+        </View>
+      );
+    }
+    if (item.rowType === "partitionTotal") {
+      return (
+        <View
+          style={[styles.partitionTotalRow, styles.boxSides, styles.boxBottom]}
+          key={item.key}
+          wrap={false}
+        >
+          <View style={styles.partitionTotalLine} />
+          <Text style={[styles.partitionTotalText, { width: `${100 - totalColWidth}%` }]}>
+            {item.itemName}
+          </Text>
+          <Text style={[styles.partitionTotalText, { width: `${totalColWidth}%` }]}>
+            $ {(item.amount || 0).toFixed(2)}
+          </Text>
+        </View>
+      );
+    }
+    const isSub = item.rowType === "sub";
+    const isGroup = item.rowType === "group";
+    const subCell = isSub ? subStyles.subCell : null;
+    return (
+      <View
+        style={[
+          styles.tableRow,
+          isSub ? subStyles.subRow : null,
+          isGroup ? styles.groupRow : null,
+          styles.boxSides,
+          item.looseTop ? [styles.boxTop, styles.partitionGap] : null,
+          item.looseBottom ? styles.boxBottom : null,
+        ]}
+        key={item.key}
+        wrap={false}
+      >
+        <Text
+          style={[
+            styles.tableCell,
+            invoiceData.includeDescription
+              ? styles.itemNameCell
+              : styles.itemNameCellWide, growCol,
+            isGroup ? subStyles.groupName : null,
+            isSub ? subStyles.subName : null,
+          ]}
+        >
+          {isSub ? SUB_ITEM_BULLET : ""}
+          {item.itemName || "Your Item Name"}
+        </Text>
+        {invoiceData.includeDescription && (
+          <Text style={[styles.tableCell, styles.descriptionCell, growCol, subCell]}>
+            {item.description || ""}
+          </Text>
+        )}
+        {showQuantity && (
+          <Text
+            style={[
+              styles.tableCell,
+              invoiceData.includeDescription
+                ? styles.qtyCell
+                : styles.qtyCellWide,
+              subCell,
+            ]}
+          >
+            {isGroup || item.showQuantity === false ? "" : item.quantity || 1}
+          </Text>
+        )}
+        {showQuantity && (
+          <Text
+            style={[
+              styles.tableCell,
+              invoiceData.includeDescription
+                ? styles.priceCell
+                : styles.priceCellWide,
+              subCell,
+            ]}
+          >
+            {isGroup || item.showQuantity === false ? "" : `$ ${(item.rate || 0).toFixed(2)}`}
+          </Text>
+        )}
+        <Text
+          style={[
+            styles.tableCell,
+            invoiceData.includeDescription
+              ? styles.totalCell
+              : styles.totalCellWide,
+            subCell,
+            isGroup ? subStyles.groupName : null,
+          ]}
+        >
+          $ {(item.amount || 0).toFixed(2)}
+        </Text>
+      </View>
+    );
+  };
+  const MAX_KEEP_TOGETHER = 12;
+  let rowBlocks = [];
+  if (items && items.length > 0) {
+    const flat = flattenInvoiceRows(items, invoiceData.partitions).map((row, index) => ({
+      ...row,
+      rowIndex: index,
+    }));
+    // Rows inside a partition are drawn inside its box
+    let inPartition = false;
+    flat.forEach((row) => {
+      if (row.rowType === "partition") inPartition = true;
+      else if (row.rowType === "partitionTotal") inPartition = false;
+      else row.inBox = inPartition;
+    });
+    // Rows outside partitions form their own closed box: its last row gets the
+    // bottom border; a run that starts after a partition box also gets a top
+    // border and the gap (one right under the table header needs neither).
+    flat.forEach((row, index) => {
+      if (row.inBox !== false) return;
+      const prev = flat[index - 1];
+      const next = flat[index + 1];
+      if (prev && prev.rowType === "partitionTotal") row.looseTop = true;
+      if (!next || next.rowType === "partition") row.looseBottom = true;
+    });
+    for (let i = 0; i < flat.length; i++) {
+      if (flat[i].rowType !== "group") {
+        rowBlocks.push([flat[i]]);
+        continue;
+      }
+      let j = i + 1;
+      while (j < flat.length && flat[j].rowType === "sub") j++;
+      const subCount = j - i - 1;
+      const keep = subCount <= MAX_KEEP_TOGETHER ? j : Math.min(j, i + 2);
+      rowBlocks.push(flat.slice(i, keep));
+      for (let k = keep; k < j; k++) rowBlocks.push([flat[k]]);
+      i = j - 1;
+    }
+    // A partition header always travels with its first row/group, and a
+    // partition total stays on the same page as the row above it.
+    const merged = [];
+    for (let b = 0; b < rowBlocks.length; b++) {
+      const block = rowBlocks[b];
+      const type = block[0].rowType;
+      const next = rowBlocks[b + 1];
+      if (type === "partition" && next && next[0].rowType !== "partitionTotal") {
+        merged.push([...block, ...next]);
+        b++;
+      } else if (type === "partitionTotal" && merged.length > 0) {
+        merged[merged.length - 1] = [...merged[merged.length - 1], ...block];
+      } else {
+        merged.push(block);
+      }
+    }
+    rowBlocks = merged;
+  }
+  // A block starting with a partition header opens a new box: leave a gap above it
+  const renderBlock = (block) =>
+    block.length === 1 ? (
+      renderRow(block[0])
+    ) : (
+      // A group row and its first sub-items stay on the same page
+      <View
+        key={`blk-${block[0].key}`}
+        style={block[0].rowType === "partition" ? styles.partitionGap : undefined}
+        wrap={false}
+      >
+        {block.map(renderRow)}
+      </View>
+    );
 
   return (
     <Document>
@@ -488,7 +804,7 @@ const BlueModernTemplate = ({ invoiceData }) => {
         {/* Items Table */}
         <View style={styles.table}>
           {/* Table Header */}
-          <View style={styles.tableHeader}>
+          <View style={styles.tableHeader} fixed>
             <Text
               style={[
                 styles.tableHeaderCell,
@@ -542,78 +858,13 @@ const BlueModernTemplate = ({ invoiceData }) => {
 
           {/* Table Rows */}
           {items && items.length > 0
-            ? flattenInvoiceItems(items).map((item) => {
-                const isSub = item.rowType === "sub";
-                const isGroup = item.rowType === "group";
-                const subCell = isSub ? subStyles.subCell : null;
-                return (
-                <View
-                  style={[styles.tableRow, isSub ? subStyles.subRow : null]}
-                  key={item.key}
-                  wrap={false}
-                >
-                  <Text
-                    style={[
-                      styles.tableCell,
-                      invoiceData.includeDescription
-                        ? styles.itemNameCell
-                        : styles.itemNameCellWide, growCol,
-                      isGroup ? subStyles.groupName : null,
-                      isSub ? subStyles.subName : null,
-                    ]}
-                  >
-                    {isSub ? SUB_ITEM_BULLET : ""}
-                    {item.itemName || "Your Item Name"}
-                  </Text>
-                  {invoiceData.includeDescription && (
-                    <Text style={[styles.tableCell, styles.descriptionCell, growCol, subCell]}>
-                      {item.description || ""}
-                    </Text>
-                  )}
-                  {showQuantity && (
-                    <Text
-                      style={[
-                        styles.tableCell,
-                        invoiceData.includeDescription
-                          ? styles.qtyCell
-                          : styles.qtyCellWide,
-                        subCell,
-                      ]}
-                    >
-                      {isGroup || item.showQuantity === false ? "" : item.quantity || 1}
-                    </Text>
-                  )}
-                  {showQuantity && (
-                    <Text
-                      style={[
-                        styles.tableCell,
-                        invoiceData.includeDescription
-                          ? styles.priceCell
-                          : styles.priceCellWide,
-                        subCell,
-                      ]}
-                    >
-                      {isGroup || item.showQuantity === false ? "" : `$ ${(item.rate || 0).toFixed(2)}`}
-                    </Text>
-                  )}
-                  <Text
-                    style={[
-                      styles.tableCell,
-                      invoiceData.includeDescription
-                        ? styles.totalCell
-                        : styles.totalCellWide,
-                      subCell,
-                      isGroup ? subStyles.groupName : null,
-                    ]}
-                  >
-                    $ {(item.amount || 0).toFixed(2)}
-                  </Text>
-                </View>
-                );
-              })
+            ? rowBlocks.map(renderBlock)
             : // Default rows if no items
               Array.from({ length: 6 }, (_, index) => (
-                <View style={styles.tableRow} key={index}>
+                <View
+                  style={[styles.tableRow, styles.boxSides, index === 5 ? styles.boxBottom : null]}
+                  key={index}
+                >
                   <Text
                     style={[
                       styles.tableCell,
@@ -668,12 +919,30 @@ const BlueModernTemplate = ({ invoiceData }) => {
         </View>
 
         {/* Totals Section */}
-        <View style={styles.totalsContainer}>
+        <View style={styles.totalsContainer} wrap={false}>
           <View style={styles.totalsSection}>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Sub Total</Text>
-              <Text style={styles.totalValue}>$ {subtotal.toFixed(2)}</Text>
-            </View>
+            {partitionTotals.length > 0 && (
+              <View>
+                {partitionTotals.map((partition) => (
+                  <View style={styles.partitionSummaryRow} key={partition.id}>
+                    <Text style={styles.partitionSummaryLabel}>
+                      {partition.name || "Untitled partition"}
+                    </Text>
+                    <Text style={styles.partitionSummaryValue}>
+                      $ {(partition.total || 0).toFixed(2)}
+                    </Text>
+                  </View>
+                ))}
+                <View style={styles.partitionSummaryDivider} />
+              </View>
+            )}
+            {/* Sub Total only matters when tax or discount change the amount */}
+            {(taxRate > 0 || discountRate > 0) && (
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Sub Total</Text>
+                <Text style={styles.totalValue}>$ {subtotal.toFixed(2)}</Text>
+              </View>
+            )}
             {taxRate > 0 && (
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>Tax ({taxRate}%)</Text>
@@ -692,13 +961,21 @@ const BlueModernTemplate = ({ invoiceData }) => {
             )}
             <View style={styles.grandTotalRow}>
               <Text style={styles.grandTotalLabel}>Total</Text>
-              <Text style={styles.grandTotalValue}>$ {total.toFixed(2)}</Text>
+              <Text
+                style={[
+                  styles.grandTotalValue,
+                  // Step the amount down only for very long amounts
+                  `$ ${total.toFixed(2)}`.length > 13 ? { fontSize: 20 } : null,
+                ]}
+              >
+                $ {total.toFixed(2)}
+              </Text>
             </View>
           </View>
         </View>
 
         {/* Footer Section */}
-        <View style={styles.footerSection}>
+        <View style={styles.footerSection} wrap={false}>
           <View style={styles.notesSection}>
             <Text style={styles.notesTitle}>Notes:</Text>
             <Text style={styles.notesText}>
@@ -721,28 +998,22 @@ const BlueModernTemplate = ({ invoiceData }) => {
               )}
               {paymentUrl && (
                 <View style={{ marginTop: 6, alignItems: "flex-end" }}>
-                  <Link
-                    src={paymentUrl}
-                    style={[
-                      styles.paymentText,
-                      {
-                        color: "#1E40AF",
-                        textDecoration: "underline",
-                        fontFamily: "Helvetica-Bold",
-                      },
-                    ]}
-                  >
-                    {paymentLinkText} »
+                  {/* The whole button is the clickable link area */}
+                  <Link src={paymentUrl} style={styles.payButtonLink}>
+                    <View style={styles.payButton}>
+                      <Text style={styles.payButtonText}>{paymentLinkText}</Text>
+                      <Svg width={10} height={10} viewBox="0 0 10 10" style={styles.payButtonIcon}>
+                        <Path
+                          d="M1 5 L8.5 5 M5.5 2 L8.5 5 L5.5 8"
+                          stroke="#FFFFFF"
+                          strokeWidth={1.6}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          fill="none"
+                        />
+                      </Svg>
+                    </View>
                   </Link>
-                  {/* Show the raw URL only when no custom link text was given */}
-                  {!hasCustomLinkText && (
-                    <Link
-                      src={paymentUrl}
-                      style={[styles.paymentText, { color: "#6B7280", fontSize: 8, textDecoration: "none" }]}
-                    >
-                      {displayUrl(paymentUrl)}
-                    </Link>
-                  )}
                 </View>
               )}
             </View>
@@ -751,14 +1022,14 @@ const BlueModernTemplate = ({ invoiceData }) => {
 
         {/* Terms and Conditions Section */}
         {terms && (
-          <View style={styles.termsSection}>
+          <View style={styles.termsSection} wrap={false}>
             <Text style={styles.termsTitle}>Terms and Conditions:</Text>
             <Text style={styles.termsText}>{terms}</Text>
           </View>
         )}
 
         {/* Thank You Section - Centered at the end */}
-        <View style={styles.thankYouSection}>
+        <View style={styles.thankYouSection} wrap={false}>
           <Text style={styles.thankYouText}>Thank You!</Text>
         </View>
       </Page>

@@ -35,7 +35,12 @@ const SWATCHES = {
   "green-classic": "bg-[#9ACD32]",
 };
 
-const TemplateSelector = ({ selectedTemplate, onTemplateChange, className = "" }) => {
+const TemplateSelector = ({
+  selectedTemplate,
+  onTemplateChange,
+  className = "",
+  compact = false,
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const [defaultTemplate, setDefaultTemplateState] = useState(getDefaultTemplate());
   const templates = getAvailableTemplates();
@@ -57,7 +62,10 @@ const TemplateSelector = ({ selectedTemplate, onTemplateChange, className = "" }
       <Button
         type="button"
         variant="outline"
-        className="w-full justify-start gap-2"
+        size={compact ? "sm" : "default"}
+        className={compact ? "gap-2" : "w-full justify-start gap-2"}
+        title="Change invoice template"
+        aria-label={`Template: ${currentTemplate?.name}. Change template`}
         onClick={(e) => {
           e.preventDefault();
           setIsOpen(true);
@@ -66,7 +74,7 @@ const TemplateSelector = ({ selectedTemplate, onTemplateChange, className = "" }
         <Palette />
         <span className={cn("size-2.5 rounded-full", SWATCHES[currentTemplate?.id])} />
         <span>{currentTemplate?.name}</span>
-        <span className="ml-auto text-xs text-muted-foreground">Change</span>
+        {!compact && <span className="ml-auto text-xs text-muted-foreground">Change</span>}
       </Button>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>

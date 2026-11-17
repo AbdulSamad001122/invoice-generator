@@ -1,6 +1,6 @@
 // Helpers for the optional payment link shown on invoices.
 
-export const DEFAULT_PAYMENT_LINK_TEXT = "Pay this invoice online";
+export const DEFAULT_PAYMENT_LINK_TEXT = "Payment Link";
 
 // Returns a safe absolute http(s) URL, or null if the value isn't a usable link.
 // "pay.example.com/abc" becomes "https://pay.example.com/abc".

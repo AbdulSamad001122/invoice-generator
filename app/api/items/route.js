@@ -16,16 +16,16 @@ import { applyRateLimit, createRateLimitResponse } from "@/lib/rateLimiter";
 // GET /api/items - Get items for the authenticated user with pagination support
 export async function GET(request) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'read');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'read', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     // Parse pagination parameters from URL
@@ -170,16 +170,16 @@ export async function GET(request) {
 // POST /api/items - Create a new item
 export async function POST(request) {
   try {
-    // Apply rate limiting
-    const rateLimitResult = applyRateLimit(request, 'write');
-    if (rateLimitResult.isLimited) {
-      return createRateLimitResponse(rateLimitResult);
-    }
-
     const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit per authenticated user (after auth so users behind one IP don't share a bucket)
+    const rateLimitResult = applyRateLimit(request, 'write', userId);
+    if (rateLimitResult.isLimited) {
+      return createRateLimitResponse(rateLimitResult);
     }
 
     // Validate request size
