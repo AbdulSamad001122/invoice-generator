@@ -1,10 +1,14 @@
-// Shared helpers for invoice line items and their optional sub-items.
+// Shared helpers for invoice line items, their optional sub-items and extras.
 //
 // Item shape (stored in invoice.data.items):
-//   { itemName, description, quantity, rate, subItems?: [{ itemName, description, quantity, rate }] }
+//   { itemName, description, quantity, rate,
+//     subItems?: [{ itemName, description, quantity, rate }],
+//     extras?:   [{ name, description, price }] }
 //
-// When an item has sub-items, it acts as a group: its amount is the sum of its
-// sub-items' amounts, and its own quantity/rate are ignored.
+// When an item has sub-items, it acts as a group: its base amount is the sum of
+// its sub-items' amounts, and its own quantity/rate are ignored.
+// Extras are paid add-ons on top of an item (e.g. "Extra revision", with a
+// description of what changed). An item's amount = base amount + its extras.
 
 const toNumber = (value) => {
   const n = Number(value);
@@ -19,10 +23,21 @@ export const hasSubItems = (item) => getSubItems(item).length > 0;
 export const calculateLineAmount = (line) =>
   toNumber(line?.quantity) * toNumber(line?.rate);
 
-export const calculateItemAmount = (item) =>
+export const getExtras = (item) => (Array.isArray(item?.extras) ? item.extras : []);
+
+export const hasExtras = (item) => getExtras(item).length > 0;
+
+export const calculateExtrasTotal = (item) =>
+  getExtras(item).reduce((sum, extra) => sum + toNumber(extra?.price), 0);
+
+// The item without its extras: its own line, or the sum of its sub-items
+export const calculateBaseAmount = (item) =>
   hasSubItems(item)
     ? getSubItems(item).reduce((sum, sub) => sum + calculateLineAmount(sub), 0)
     : calculateLineAmount(item);
+
+// Everything the item adds to the invoice: base amount + extras
+export const calculateItemAmount = (item) => calculateBaseAmount(item) + calculateExtrasTotal(item);
 
 export const calculateItemsSubtotal = (items) =>
   (Array.isArray(items) ? items : []).reduce(
@@ -77,18 +92,31 @@ export const prepareItemsForPDF = (items) =>
       ...(item.partitionId ? { partitionId: item.partitionId } : {}),
       ...(item.placeBefore ? { placeBefore: item.placeBefore } : {}),
       ...(subItems.length > 0 ? { subItems } : {}),
+      ...(hasExtras(item)
+        ? {
+            extras: getExtras(item).map((extra) => ({
+              name: extra.name || "",
+              description: extra.description || "",
+              price: toNumber(extra.price),
+            })),
+          }
+        : {}),
     };
   });
 
 // Flatten items into table rows for PDF templates.
-// rowType: "item" (plain line), "group" (has sub-items), "sub" (a sub-item).
+// rowType: "item" (plain line), "group" (has sub-items), "sub" (a sub-item),
+// "extra" (a paid add-on of the item above; itemName = extra name,
+// description = what changed, amount = its price, no quantity/rate).
+// A plain item row shows its own line amount (its extras are listed below it);
+// a group row shows the group's full total (sub-items + extras).
 export const flattenInvoiceItems = (items) => {
   const rows = [];
   (Array.isArray(items) ? items : []).forEach((item, index) => {
     const subItems = getSubItems(item);
     rows.push({
       ...item,
-      amount: calculateItemAmount(item),
+      amount: subItems.length > 0 ? calculateItemAmount(item) : calculateLineAmount(item),
       rowType: subItems.length > 0 ? "group" : "item",
       key: `item-${index}`,
     });
@@ -98,6 +126,18 @@ export const flattenInvoiceItems = (items) => {
         amount: calculateLineAmount(sub),
         rowType: "sub",
         key: `item-${index}-sub-${subIndex}`,
+      });
+    });
+    getExtras(item).forEach((extra, extraIndex) => {
+      rows.push({
+        itemName: extra.name || "Extra",
+        description: extra.description || "",
+        quantity: 1,
+        rate: toNumber(extra.price),
+        amount: toNumber(extra.price),
+        showQuantity: false,
+        rowType: "extra",
+        key: `item-${index}-extra-${extraIndex}`,
       });
     });
   });
@@ -113,6 +153,8 @@ export const subItemPdfStyles = {
 };
 
 export const SUB_ITEM_BULLET = "•  ";
+// Marker in front of an extra's name on PDFs (plain "+", which the standard PDF fonts can render)
+export const EXTRA_MARK = "+  ";
 
 // ---------- Work partitions
 // An invoice can split its items into named, ordered partitions (e.g. "Quiz",

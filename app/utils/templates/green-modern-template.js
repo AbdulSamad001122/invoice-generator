@@ -6,6 +6,7 @@ import {
   calculateItemsSubtotal,
   subItemPdfStyles as subStyles,
   SUB_ITEM_BULLET,
+  EXTRA_MARK,
 } from "../invoiceItems";
 import { normalizePaymentUrl, getPaymentLinkText } from "../paymentLink";
 import {
@@ -474,6 +475,35 @@ const styles = StyleSheet.create({
   groupRow: {
     backgroundColor: "#F0FDF4",
   },
+  // Extra (paid add-on) row: a warm tint sets it apart from the gray sub-items,
+  // indented under its item with an amber "+" in front of the name
+  extraRow: {
+    // No tint: extras use the normal row background
+  },
+  extraNameCell: {
+    flexDirection: "row",
+    paddingLeft: 16,
+  },
+  extraMark: {
+    width: 8, // same text start as a sub-item's bullet + spaces
+    fontSize: 9,
+    fontFamily: "Helvetica-Bold",
+    color: "#047857",
+  },
+  extraText: {
+    flex: 1,
+    flexDirection: "column",
+  },
+  extraName: {
+    fontSize: 9,
+    color: "#374151",
+  },
+  extraDescription: {
+    fontSize: 8,
+    color: "#6B7280",
+    marginTop: 2,
+    lineHeight: 1.3,
+  },
   partitionTotalsList: {
     borderBottomWidth: 1,
     borderBottomColor: "#E5E7EB",
@@ -534,6 +564,8 @@ const styles = StyleSheet.create({
 // A partition header is kept with the first row/group after it, and a partition
 // total with the row/group before it, so neither is stranded alone on a page.
 const MAX_ROWS_KEPT_TOGETHER = 12;
+// Rows that belong to the item above them: its sub-items and its extras
+const isChildRow = (row) => row?.rowType === "sub" || row?.rowType === "extra";
 const groupRowBlocks = (rows, renderRow) => {
   const blocks = [];
   let pendingHeader = null;
@@ -550,9 +582,13 @@ const groupRowBlocks = (rows, renderRow) => {
     }
     if (row.rowType === "partitionTotal") {
       kept.push(renderRow(row, i));
-    } else if (row.rowType === "group" && rows[i + 1]?.rowType === "sub") {
+    } else if (
+      (row.rowType === "group" || row.rowType === "item") &&
+      isChildRow(rows[i + 1])
+    ) {
+      // An item/group moves with its sub-items and extras as one block
       let end = i + 1;
-      while (rows[end + 1]?.rowType === "sub") end++;
+      while (isChildRow(rows[end + 1])) end++;
       const lastKept = end - i + 1 <= MAX_ROWS_KEPT_TOGETHER ? end : i + 1;
       for (let j = i; j <= lastKept; j++) kept.push(renderRow(rows[j], j));
       i = lastKept;
@@ -648,6 +684,9 @@ const GreenModernTemplate = ({ invoiceData }) => {
     stripeIndex[i] = row.rowType === "partition" || row.rowType === "partitionTotal" ? 0 : stripe++;
   });
   const totalColStyle = invoiceData.includeDescription ? styles.totalCell : styles.totalCellWide;
+  // Extra rows: the name/description block spans everything left of Qty/Price
+  const qtyPriceWidth = invoiceData.includeDescription ? 15 + 17.5 : 16.67 * 2;
+  const extraNameWidth = 100 - totalColWidth - (showQuantity ? qtyPriceWidth : 0);
 
   // Split rows into sections: ungrouped rows (not boxed) and one section per partition
   // (header + rows + total), rendered inside an outlined box. Row indexes stay global
@@ -715,6 +754,39 @@ const GreenModernTemplate = ({ invoiceData }) => {
                 const isSub = item.rowType === "sub";
                 const isGroup = item.rowType === "group";
                 const subCell = isSub ? subStyles.subCell : null;
+                if (item.rowType === "extra") {
+                  return (
+                    <View
+                      style={[
+                        styles.tableRow,
+                        styles.extraRow,
+                        styles.boxedRow,
+                        item.sectionStart ? styles.sectionStartRow : null,
+                        item.sectionEnd ? styles.sectionEndRow : null,
+                        item.beforeTotal ? { borderBottomColor: styles.extraRow.backgroundColor } : null,
+                      ]}
+                      key={item.key}
+                      wrap={false}
+                    >
+                      {/* Name (with its description underneath) spans the name and
+                          description columns; Qty and Price stay empty */}
+                      <View style={[styles.extraNameCell, { width: `${extraNameWidth}%` }]}>
+                        {/* The mark's box width stands in for EXTRA_MARK's trailing spaces */}
+                        <Text style={styles.extraMark}>{EXTRA_MARK.trimEnd()}</Text>
+                        <View style={styles.extraText}>
+                          <Text style={styles.extraName}>{item.itemName || "Extra"}</Text>
+                          {item.description ? (
+                            <Text style={styles.extraDescription}>{item.description}</Text>
+                          ) : null}
+                        </View>
+                      </View>
+                      {showQuantity && <View style={{ width: `${qtyPriceWidth}%` }} />}
+                      <Text style={[styles.tableCell, totalColStyle, styles.extraName]}>
+                        $ {(item.amount || 0).toFixed(2)}
+                      </Text>
+                    </View>
+                  );
+                }
                 return (
                 <View
                   style={[

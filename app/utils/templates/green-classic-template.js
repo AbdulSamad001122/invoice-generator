@@ -6,6 +6,7 @@ import {
   calculateItemsSubtotal,
   subItemPdfStyles as subStyles,
   SUB_ITEM_BULLET,
+  EXTRA_MARK,
 } from "../invoiceItems";
 import { normalizePaymentUrl, getPaymentLinkText } from "../paymentLink";
 import {
@@ -482,6 +483,32 @@ const styles = StyleSheet.create({
   groupRow: {
     backgroundColor: "#EBEFE3",
   },
+  // Extra (paid add-on of the item above): indented like a sub-item, on a warm
+  // tint with an accent "+", so it reads as an add-on rather than a sub-item
+  extraRow: {
+    // No tint: extras use the normal row background
+  },
+  extraNameCell: {
+    paddingLeft: 16,
+  },
+  extraName: {
+    fontSize: 9.5,
+    color: "#1F2937",
+  },
+  extraMark: {
+    fontFamily: "Helvetica-Bold",
+    color: "#4D7C0F",
+  },
+  extraDescription: {
+    fontSize: 8.5,
+    color: "#6B7280",
+    marginTop: 2,
+    paddingLeft: 11,
+    lineHeight: 1.3,
+  },
+  extraAmount: {
+    color: "#1F2937",
+  },
   partitionSummary: {
     borderBottomWidth: 1,
     borderBottomColor: "#E5E7EB",
@@ -609,7 +636,8 @@ const GreenClassicTemplate = ({ invoiceData }) => {
         const prev = rows[index - 1];
         row.opensBox = !inPartition && Boolean(prev && prev.rowType === "partitionTotal");
         if (row.opensBox) stripe = -1;
-        stripe += 1;
+        // Extras have their own tint and don't affect the striping
+        if (row.rowType !== "extra") stripe += 1;
         row.stripe = stripe;
         row.inBox = inPartition;
         // Ungrouped rows form their own closed box: its last row draws the bottom
@@ -639,6 +667,58 @@ const GreenClassicTemplate = ({ invoiceData }) => {
             {item.itemName}
           </Text>
           <Text style={[styles.partitionTotalValue, { width: `${totalColWidth}%` }]}>
+            {formatCurrency(item.amount)}
+          </Text>
+        </View>
+      );
+    }
+    if (item.rowType === "extra") {
+      return (
+        <View
+          key={item.key}
+          wrap={false}
+          style={[
+            styles.tableRow,
+            styles.extraRow,
+            styles.boxSides,
+            item.opensBox ? [styles.boxTop, styles.partitionGap] : {},
+            item.closesBox ? styles.boxBottom : {},
+          ]}
+        >
+          <View
+            style={[
+              includeDescription ? styles.itemNameCell : styles.itemNameCellWide,
+              growCol,
+              styles.textCellGutter,
+              styles.extraNameCell,
+            ]}
+          >
+            <Text style={styles.extraName} hyphenationCallback={breakLongWords}>
+              <Text style={styles.extraMark}>{EXTRA_MARK}</Text>
+              {item.itemName || "Extra"}
+            </Text>
+            {item.description ? (
+              <Text style={styles.extraDescription} hyphenationCallback={breakLongWords}>
+                {item.description}
+              </Text>
+            ) : null}
+          </View>
+          {includeDescription && (
+            <Text style={[styles.tableCell, styles.descriptionCell, growCol, styles.textCellGutter]} />
+          )}
+          {showQuantity && (
+            <Text style={[styles.tableCell, includeDescription ? styles.qtyCell : styles.qtyCellWide]} />
+          )}
+          {showQuantity && (
+            <Text style={[styles.tableCell, includeDescription ? styles.priceCell : styles.priceCellWide]} />
+          )}
+          <Text
+            style={[
+              styles.tableCell,
+              includeDescription ? styles.totalCell : styles.totalCellWide,
+              styles.extraAmount,
+            ]}
+          >
             {formatCurrency(item.amount)}
           </Text>
         </View>
@@ -719,19 +799,20 @@ const GreenClassicTemplate = ({ invoiceData }) => {
     );
   };
 
-  // Keep-together blocks: a group row stays with its sub-items (all of them for
-  // normal-sized groups, only the first one for very long groups); a partition
+  // Keep-together blocks: an item/group row stays with its sub-items and extras
+  // (all of them for normal-sized blocks, only the first one for very long
+  // ones); a partition
   // header travels with its first row/group; a partition total stays on the
   // same page as the row above it.
   const MAX_KEEP_TOGETHER = 12;
   let rowBlocks = [];
   for (let i = 0; i < rows.length; i++) {
-    if (rows[i].rowType !== "group") {
+    if (rows[i].rowType !== "group" && rows[i].rowType !== "item") {
       rowBlocks.push([rows[i]]);
       continue;
     }
     let j = i + 1;
-    while (j < rows.length && rows[j].rowType === "sub") j++;
+    while (j < rows.length && (rows[j].rowType === "sub" || rows[j].rowType === "extra")) j++;
     const keep = j - i - 1 <= MAX_KEEP_TOGETHER ? j : Math.min(j, i + 2);
     rowBlocks.push(rows.slice(i, keep));
     for (let k = keep; k < j; k++) rowBlocks.push([rows[k]]);

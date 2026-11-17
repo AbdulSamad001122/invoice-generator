@@ -6,6 +6,7 @@ import {
   calculateItemsSubtotal,
   subItemPdfStyles as subStyles,
   SUB_ITEM_BULLET,
+  EXTRA_MARK,
 } from "../invoiceItems";
 import { normalizePaymentUrl, getPaymentLinkText } from "../paymentLink";
 import {
@@ -328,6 +329,31 @@ const styles = StyleSheet.create({
   groupRow: {
     backgroundColor: "#EAF1FD",
   },
+  // Extra (paid add-on) row: a warm tint so it reads as an add-on of the item
+  // above, distinct from the grey sub-item rows
+  extraRow: {
+    // No tint: extras use the normal row background
+  },
+  extraNameCell: {
+    paddingLeft: 16,
+    paddingRight: 2,
+  },
+  extraName: {
+    fontSize: 9,
+    lineHeight: 1.35,
+    color: "#374151",
+  },
+  extraMark: {
+    fontFamily: "Helvetica-Bold",
+    color: "#1E40AF",
+  },
+  extraDescription: {
+    marginTop: 1,
+    paddingLeft: 11,
+    fontSize: 8,
+    lineHeight: 1.35,
+    color: "#6B7280",
+  },
   // Partition lines in the totals area (lighter than the Sub Total line)
   partitionSummaryRow: {
     flexDirection: "row",
@@ -565,6 +591,58 @@ const BlueModernTemplate = ({ invoiceData }) => {
         </View>
       );
     }
+    if (item.rowType === "extra") {
+      // Name (and what changed, underneath) spans the name + description columns;
+      // Qty/Price stay empty and the price sits in the Total column.
+      const nameWidth = showQuantity ? "50%" : `${100 - totalColWidth}%`;
+      return (
+        <View
+          style={[
+            styles.tableRow,
+            styles.extraRow,
+            styles.boxSides,
+            item.looseTop ? [styles.boxTop, styles.partitionGap] : null,
+            item.looseBottom ? styles.boxBottom : null,
+          ]}
+          key={item.key}
+          wrap={false}
+        >
+          <View style={[styles.extraNameCell, { width: nameWidth }]}>
+            <Text style={styles.extraName}>
+              <Text style={styles.extraMark}>{EXTRA_MARK}</Text>
+              {item.itemName || "Extra"}
+            </Text>
+            {item.description ? (
+              <Text style={styles.extraDescription}>{item.description}</Text>
+            ) : null}
+          </View>
+          {showQuantity && (
+            <Text
+              style={[
+                styles.tableCell,
+                invoiceData.includeDescription ? styles.qtyCell : styles.qtyCellWide,
+              ]}
+            />
+          )}
+          {showQuantity && (
+            <Text
+              style={[
+                styles.tableCell,
+                invoiceData.includeDescription ? styles.priceCell : styles.priceCellWide,
+              ]}
+            />
+          )}
+          <Text
+            style={[
+              styles.tableCell,
+              invoiceData.includeDescription ? styles.totalCell : styles.totalCellWide,
+            ]}
+          >
+            $ {(item.amount || 0).toFixed(2)}
+          </Text>
+        </View>
+      );
+    }
     const isSub = item.rowType === "sub";
     const isGroup = item.rowType === "group";
     const subCell = isSub ? subStyles.subCell : null;
@@ -665,12 +743,18 @@ const BlueModernTemplate = ({ invoiceData }) => {
       if (!next || next.rowType === "partition") row.looseBottom = true;
     });
     for (let i = 0; i < flat.length; i++) {
-      if (flat[i].rowType !== "group") {
+      const type = flat[i].rowType;
+      if (type !== "group" && type !== "item") {
         rowBlocks.push([flat[i]]);
         continue;
       }
+      // An item/group travels with its sub-items and extras
       let j = i + 1;
-      while (j < flat.length && flat[j].rowType === "sub") j++;
+      while (j < flat.length && (flat[j].rowType === "sub" || flat[j].rowType === "extra")) j++;
+      if (j === i + 1) {
+        rowBlocks.push([flat[i]]);
+        continue;
+      }
       const subCount = j - i - 1;
       const keep = subCount <= MAX_KEEP_TOGETHER ? j : Math.min(j, i + 2);
       rowBlocks.push(flat.slice(i, keep));

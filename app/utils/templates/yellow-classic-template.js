@@ -6,6 +6,7 @@ import {
   calculateItemsSubtotal,
   subItemPdfStyles as subStyles,
   SUB_ITEM_BULLET,
+  EXTRA_MARK,
 } from "../invoiceItems";
 import { normalizePaymentUrl, getPaymentLinkText } from "../paymentLink";
 import {
@@ -335,6 +336,29 @@ const styles = StyleSheet.create({
   groupRow: {
     backgroundColor: "#FBE7A1",
   },
+  // Extras (paid add-ons of the item above): a soft warm tint, indented like a
+  // sub-item, with an amber "+" so they read as add-ons rather than sub-items
+  extraRow: {
+    // No tint: extras use the normal row background
+  },
+  extraNameCell: {
+    paddingLeft: 16,
+  },
+  extraName: {
+    fontSize: 9,
+    color: "#000000",
+  },
+  extraMark: {
+    fontFamily: "Helvetica-Bold",
+    color: "#000000",
+  },
+  extraDescription: {
+    marginTop: 2,
+    paddingLeft: 11,
+    fontSize: 8,
+    lineHeight: 1.3,
+    color: "#6B5D1E",
+  },
   // Totals section
   totalsContainer: {
     flexDirection: "row",
@@ -555,7 +579,14 @@ const YellowClassicTemplate = ({ invoiceData }) => {
 
   const renderRow = (
     item,
-    { boxed = false, beforeTotal = false, loose = false, looseFirst = false, looseLast = false }
+    {
+      boxed = false,
+      beforeTotal = false,
+      loose = false,
+      looseFirst = false,
+      looseLast = false,
+      headAhead = false,
+    }
   ) => {
     if (item.rowType === "partition") {
       return (
@@ -598,6 +629,68 @@ const YellowClassicTemplate = ({ invoiceData }) => {
         </View>
       );
     }
+    const rowEdges = [
+      boxed ? styles.boxedRow : null,
+      boxed && beforeTotal ? styles.boxedRowLast : null,
+      loose ? styles.looseRow : null,
+      looseFirst ? styles.looseRowFirstDetached : null,
+      looseLast ? styles.looseRowLast : null,
+    ];
+    if (item.rowType === "extra") {
+      // A paid add-on: "+ name" with what changed underneath (always shown, even
+      // when the invoice has no Description column); no quantity or price
+      return (
+        <View style={[styles.tableRow, styles.extraRow, ...rowEdges]} key={item.key} wrap={false}>
+          <View
+            style={[
+              styles.tableCell,
+              invoiceData.includeDescription ? styles.itemNameCell : styles.itemNameCellWide,
+              growCol,
+              styles.extraNameCell,
+            ]}
+          >
+            <Text style={styles.extraName}>
+              <Text style={styles.extraMark}>{EXTRA_MARK}</Text>
+              {item.itemName || "Extra"}
+            </Text>
+            {item.description ? (
+              <Text style={styles.extraDescription}>{item.description}</Text>
+            ) : null}
+          </View>
+          {invoiceData.includeDescription && (
+            <Text style={[styles.tableCell, styles.descriptionCell, growCol]}>{""}</Text>
+          )}
+          {showQuantity && (
+            <Text
+              style={[
+                styles.tableCell,
+                invoiceData.includeDescription ? styles.qtyCell : styles.qtyCellWide,
+              ]}
+            >
+              {""}
+            </Text>
+          )}
+          {showQuantity && (
+            <Text
+              style={[
+                styles.tableCell,
+                invoiceData.includeDescription ? styles.priceCell : styles.priceCellWide,
+              ]}
+            >
+              {""}
+            </Text>
+          )}
+          <Text
+            style={[
+              styles.tableCell,
+              invoiceData.includeDescription ? styles.totalCell : styles.totalCellWide,
+            ]}
+          >
+            ${(item.amount || 0).toFixed(2)}
+          </Text>
+        </View>
+      );
+    }
     const isSub = item.rowType === "sub";
     const isGroup = item.rowType === "group";
     const subCell = isSub ? subStyles.subCell : null;
@@ -607,16 +700,13 @@ const YellowClassicTemplate = ({ invoiceData }) => {
           styles.tableRow,
           isSub ? subStyles.subRow : null,
           isGroup ? styles.groupRow : null,
-          boxed ? styles.boxedRow : null,
-          boxed && beforeTotal ? styles.boxedRowLast : null,
-          loose ? styles.looseRow : null,
-          looseFirst ? styles.looseRowFirstDetached : null,
-          looseLast ? styles.looseRowLast : null,
+          ...rowEdges,
         ]}
         key={item.key}
         wrap={false}
-        // Keep a group heading on the same page as its first sub-item
-        minPresenceAhead={isGroup ? 30 : 0}
+        // Keep a group heading (or an item with extras) on the same page as its
+        // first following row
+        minPresenceAhead={isGroup || headAhead ? 30 : 0}
       >
         <Text
           style={[
@@ -682,6 +772,53 @@ const YellowClassicTemplate = ({ invoiceData }) => {
     (invoiceData.bankAccount ? 16 : 0) +
     (paymentUrl ? 42 : 0);
   const footerReserve = Math.min(28 + Math.max(notesHeight, paymentHeight) + 4, 180);
+
+  // Rough height (pt) of a row, for deciding whether an item block fits as one
+  const nameChars = invoiceData.includeDescription ? 26 : 55;
+  const estimateRowHeight = (row) => {
+    const lines = Math.max(1, Math.ceil(String(row.itemName || "").length / nameChars));
+    const descLines =
+      row.rowType === "extra" && row.description
+        ? Math.ceil(String(row.description).length / (nameChars + 6))
+        : 0;
+    return 12 + lines * 11 + descLines * 10.5;
+  };
+
+  // Draw a segment's rows. An item (or group) that has extras moves to a new page
+  // together with its sub-items and extras when the block is reasonably sized;
+  // longer blocks at least keep the item row with the row after it.
+  // Items without extras are drawn exactly as before.
+  const renderSegmentRows = (segRows, rowOptions) => {
+    const out = [];
+    let i = 0;
+    while (i < segRows.length) {
+      const row = segRows[i];
+      if (row.rowType === "item" || row.rowType === "group") {
+        let end = i + 1;
+        while (end < segRows.length && (segRows[end].rowType === "sub" || segRows[end].rowType === "extra")) end++;
+        const block = segRows.slice(i, end);
+        if (block.some((r) => r.rowType === "extra")) {
+          const height = block.reduce((sum, r) => sum + estimateRowHeight(r), 0);
+          if (height <= 320) {
+            out.push(
+              <View key={`block-${row.key}`} wrap={false}>
+                {block.map((r, j) => renderRow(r, rowOptions(i + j)))}
+              </View>
+            );
+          } else {
+            block.forEach((r, j) =>
+              out.push(renderRow(r, { ...rowOptions(i + j), headAhead: j === 0 }))
+            );
+          }
+          i = end;
+          continue;
+        }
+      }
+      out.push(renderRow(row, rowOptions(i)));
+      i++;
+    }
+    return out;
+  };
 
   return (
     <Document>
@@ -828,22 +965,21 @@ const YellowClassicTemplate = ({ invoiceData }) => {
             segments.map((segment, segIndex) =>
               segment.partition ? (
                 <View key={segment.key} style={styles.partitionBox}>
-                  {segment.rows.map((row, i) =>
-                    renderRow(row, { boxed: true, beforeTotal: segment.rows[i + 1]?.rowType === "partitionTotal" })
-                  )}
+                  {renderSegmentRows(segment.rows, (i) => ({
+                    boxed: true,
+                    beforeTotal: segment.rows[i + 1]?.rowType === "partitionTotal",
+                  }))}
                 </View>
               ) : (
                 <View
                   key={segment.key}
                   style={segIndex > 0 ? styles.looseBlockDetached : null}
                 >
-                  {segment.rows.map((row, i) =>
-                    renderRow(row, {
-                      loose: true,
-                      looseFirst: segIndex > 0 && i === 0,
-                      looseLast: i === segment.rows.length - 1,
-                    })
-                  )}
+                  {renderSegmentRows(segment.rows, (i) => ({
+                    loose: true,
+                    looseFirst: segIndex > 0 && i === 0,
+                    looseLast: i === segment.rows.length - 1,
+                  }))}
                 </View>
               )
             )

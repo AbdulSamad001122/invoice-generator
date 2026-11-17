@@ -60,6 +60,9 @@ import {
   hasSubItems,
   calculateItemAmount,
   calculateLineAmount,
+  getExtras,
+  hasExtras,
+  calculateExtrasTotal,
   calculateItemsSubtotal,
   prepareItemsForPDF,
   lineShowsQuantity,
@@ -426,6 +429,12 @@ export default function InvoiceForm({
         } else {
           validateLine(item, `item_${index}`);
         }
+        // Extras (paid add-ons): each needs a name and a price
+        getExtras(item).forEach((extra, extraIndex) => {
+          const prefix = `item_${index}_extra_${extraIndex}`;
+          if (!(extra.name || "").trim()) newErrors[`${prefix}_name`] = "Name the extra";
+          if (!(Number(extra.price) > 0)) newErrors[`${prefix}_price`] = "Price must be greater than 0";
+        });
       });
     }
 
@@ -604,6 +613,41 @@ export default function InvoiceForm({
         return next;
       });
     }
+  };
+
+  // ---------- Extras: paid add-ons on top of an item (e.g. "Extra revision")
+  const addExtra = (index) => {
+    setFormData((prev) => {
+      const items = [...prev.items];
+      const item = items[index];
+      items[index] = { ...item, extras: [...getExtras(item), { name: "", description: "", price: 0 }] };
+      return { ...prev, items };
+    });
+  };
+
+  const handleExtraChange = (index, extraIndex, field, value) => {
+    setFormData((prev) => {
+      const items = [...prev.items];
+      const extras = [...getExtras(items[index])];
+      extras[extraIndex] = { ...extras[extraIndex], [field]: value };
+      items[index] = { ...items[index], extras };
+      return { ...prev, items };
+    });
+    clearErrors([`item_${index}_extra_${extraIndex}_${field}`]);
+  };
+
+  const removeExtra = (index, extraIndex) => {
+    setFormData((prev) => {
+      const items = [...prev.items];
+      const extras = getExtras(items[index]).filter((_, i) => i !== extraIndex);
+      const { extras: _old, ...rest } = items[index];
+      items[index] = extras.length > 0 ? { ...rest, extras } : rest;
+      return { ...prev, items };
+    });
+    // Extra indexes shift: drop this item's extra errors (re-checked on save)
+    setErrors((prev) =>
+      Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith(`item_${index}_extra_`)))
+    );
   };
 
   const addSubItem = (index) => {
@@ -1194,6 +1238,11 @@ export default function InvoiceForm({
                           >
                             ${calculateItemAmount(item).toFixed(2)}
                           </div>
+                          {hasExtras(item) && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Includes ${calculateExtrasTotal(item).toFixed(2)} extras
+                            </p>
+                          )}
                         </div>
 
                         <div className="md:col-span-1">
@@ -1368,16 +1417,96 @@ export default function InvoiceForm({
                         </div>
                       )}
 
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => addSubItem(index)}
-                        className="h-8 px-2 text-muted-foreground hover:text-foreground"
-                      >
-                        <Plus className="w-3.5 h-3.5 mr-1" />
-                        Add sub-item
-                      </Button>
+                      {/* Extras: paid add-ons on top of this item */}
+                      {hasExtras(item) && (
+                        <div className="ml-2 md:ml-4 space-y-3 rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 p-3">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                            Extras
+                          </p>
+                          {getExtras(item).map((extra, extraIndex) => {
+                            const prefix = `item_${index}_extra_${extraIndex}`;
+                            return (
+                              <div key={extraIndex} className="grid grid-cols-1 gap-3 md:grid-cols-12 md:items-start">
+                                <div className="flex items-start gap-2 md:col-span-4">
+                                  <Plus className="mt-3 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                  <div className="flex-1">
+                                    <Input
+                                      aria-label="Extra name"
+                                      value={extra.name}
+                                      onChange={(e) => handleExtraChange(index, extraIndex, "name", e.target.value)}
+                                      placeholder="e.g. Extra revision"
+                                      maxLength={80}
+                                      className={errors[`${prefix}_name`] ? "border-destructive" : ""}
+                                    />
+                                    {fieldError(`${prefix}_name`)}
+                                  </div>
+                                </div>
+                                <div className="md:col-span-5">
+                                  <Input
+                                    aria-label="What changed"
+                                    value={extra.description}
+                                    onChange={(e) => handleExtraChange(index, extraIndex, "description", e.target.value)}
+                                    placeholder="What changed? e.g. New headline and colours"
+                                    maxLength={300}
+                                  />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Input
+                                    aria-label="Extra price"
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={extra.price}
+                                    onFocus={(e) => {
+                                      if (e.target.value === "0") e.target.value = "";
+                                    }}
+                                    onChange={(e) =>
+                                      handleExtraChange(index, extraIndex, "price", parseFloat(e.target.value) || 0)
+                                    }
+                                    placeholder="Price"
+                                    className={errors[`${prefix}_price`] ? "border-destructive" : ""}
+                                  />
+                                  {fieldError(`${prefix}_price`)}
+                                </div>
+                                <div className="md:col-span-1">
+                                  <Button
+                                    type="button"
+                                    onClick={() => removeExtra(index, extraIndex)}
+                                    variant="ghost"
+                                    size="sm"
+                                    aria-label="Remove extra"
+                                  >
+                                    <Trash2 className="w-4 h-4 text-muted-foreground" />
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => addSubItem(index)}
+                          className="h-8 px-2 text-muted-foreground hover:text-foreground"
+                        >
+                          <Plus className="w-3.5 h-3.5 mr-1" />
+                          Add sub-item
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => addExtra(index)}
+                          className="h-8 px-2 text-muted-foreground hover:text-foreground"
+                        >
+                          <Plus className="w-3.5 h-3.5 mr-1" />
+                          Add extra
+                        </Button>
+                      </div>
                     </div>
                   );
   };
